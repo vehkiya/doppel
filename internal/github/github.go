@@ -76,26 +76,104 @@ func Available() bool {
 }
 
 // NotSignedInError means gh has no token for a user on a host.
-type NotSignedInError struct{ Host, User string }
+type NotSignedInError struct {
+	Host, User string
+	// Reason is what gh said when it refused to give a token, if it did.
+	Reason string
+	// Known lists the accounts gh is signed in to on Host. It is nil when gh
+	// couldn't say, and empty when gh has none.
+	Known []string
+}
 
 func (e *NotSignedInError) Error() string {
-	return fmt.Sprintf("gh isn't signed in to %s as %s", e.Host, e.User)
+	msg := fmt.Sprintf("gh isn't signed in to %s as %s", e.Host, e.User)
+	if e.Reason != "" {
+		msg += " (" + e.Reason + ")"
+	}
+	switch {
+	case e.Known == nil:
+	case len(e.Known) == 0:
+		msg += "; gh has no accounts on " + e.Host
+	default:
+		msg += "; gh has " + strings.Join(e.Known, ", ") + " on " + e.Host
+	}
+	return msg
+}
+
+// Account is one account gh is signed in to on a host.
+type Account struct {
+	Login  string
+	Active bool
+}
+
+// Accounts lists the accounts gh is signed in to on apiHost, with the
+// spelling of each login that gh matches exactly. It reads
+// `gh auth status --json hosts`, which prints no tokens, and fails for a gh
+// too old to have that flag.
+func Accounts(apiHost string) ([]Account, error) {
+	out, err := run(apiHost, "", "auth", "status", "--hostname", apiHost, "--json", "hosts")
+	if err != nil {
+		return nil, err
+	}
+	var status struct {
+		Hosts map[string][]struct {
+			Login  string `json:"login"`
+			Active bool   `json:"active"`
+		} `json:"hosts"`
+	}
+	if err := json.Unmarshal([]byte(out), &status); err != nil {
+		return nil, fmt.Errorf("unexpected reply from gh auth status: %w", err)
+	}
+	accounts := []Account{}
+	for host, list := range status.Hosts {
+		if strings.EqualFold(host, apiHost) {
+			for _, a := range list {
+				accounts = append(accounts, Account{Login: a.Login, Active: a.Active})
+			}
+		}
+	}
+	return accounts, nil
 }
 
 // Client talks to one GitHub host as one user.
 type Client struct {
-	Host, User string
-	token      string
+	Host string
+	// User is the login as gh spells it, which can differ in capitals from
+	// the name ForUser was asked for.
+	User  string
+	token string
 }
 
 // ForUser returns a client using the token gh stores for user on apiHost.
+// gh matches the user name exactly, so the name is first looked up, ignoring
+// case, among the accounts gh knows. A gh too old to list them is given the
+// name as it is.
 func ForUser(apiHost, user string) (*Client, error) {
-	out, err := run(apiHost, "", "auth", "token", "--hostname", apiHost, "--user", user)
+	login := user
+	var known []string
+	if accounts, err := Accounts(apiHost); err == nil {
+		known = []string{}
+		found := false
+		for _, a := range accounts {
+			known = append(known, a.Login)
+			if !found && strings.EqualFold(a.Login, user) {
+				login, found = a.Login, true
+			}
+		}
+		if !found {
+			return nil, &NotSignedInError{Host: apiHost, User: user, Known: known}
+		}
+	}
+	out, err := run(apiHost, "", "auth", "token", "--hostname", apiHost, "--user", login)
 	token := strings.TrimSpace(out)
 	if err != nil || token == "" {
-		return nil, &NotSignedInError{Host: apiHost, User: user}
+		reason := ""
+		if err != nil {
+			reason = strings.TrimPrefix(err.Error(), "gh: ")
+		}
+		return nil, &NotSignedInError{Host: apiHost, User: user, Reason: reason, Known: known}
 	}
-	return &Client{Host: apiHost, User: user, token: token}, nil
+	return &Client{Host: apiHost, User: login, token: token}, nil
 }
 
 // Info returns the user the token belongs to and the scopes it grants.

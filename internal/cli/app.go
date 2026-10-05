@@ -34,6 +34,8 @@ type app struct {
 
 	generate func(path, comment string) error // creates a key, asking for its passphrase
 	copy     func(text string) error          // puts text on the clipboard
+
+	unlock func() // releases the write lock while this command holds it
 }
 
 func (a *app) printf(format string, args ...any) {
@@ -156,6 +158,7 @@ func newApp() (*app, error) {
 
 // run dispatches the command line and returns the process exit status.
 func (a *app) run(args []string) int {
+	defer a.unlockWrites()
 	if len(args) == 0 && a.browsable {
 		if err := git.Check(); err != nil {
 			return a.fail(err)

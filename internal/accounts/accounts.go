@@ -3,6 +3,8 @@
 package accounts
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -35,6 +37,9 @@ type Account struct {
 	// File is the account file this account was loaded from, "" for a new
 	// account. It differs from the account's path after a rename.
 	File string
+	// Checksum identifies the content File had when it was loaded, so a
+	// command can tell before writing that someone changed the file since.
+	Checksum string
 }
 
 // Keys doppel manages in an account file. Everything else in the file is
@@ -177,14 +182,36 @@ func Load(env *paths.Env) ([]*Account, error) {
 		if err := ValidateID(id); err != nil {
 			return nil, fmt.Errorf("%s: %w; rename the file", env.Shorten(path), err)
 		}
+		// Read the bytes before parsing them: a change in between then
+		// shows up as a stale checksum rather than going unnoticed.
+		sum, err := FileChecksum(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", env.Shorten(path), err)
+		}
 		values, err := git.ReadConfigFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", env.Shorten(path), err)
 		}
-		accounts = append(accounts, fromConfig(id, path, values))
+		acc := fromConfig(id, path, values)
+		acc.Checksum = sum
+		accounts = append(accounts, acc)
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
 	return accounts, nil
+}
+
+// FileChecksum identifies a file's content. A file that doesn't exist has
+// the checksum "".
+func FileChecksum(path string) (string, error) {
+	data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // an account file inside doppel's directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // Find returns the account named id, or nil.
@@ -296,7 +323,11 @@ func (a *Account) Validate() error {
 	}
 	for _, f := range a.Folders {
 		if err := paths.ValidateFolder(f); err != nil {
-			return fmt.Errorf("account %s: folder %q: %w (fix doppel.folder in the account file, or run `doppel unbind`)", a.ID, f, err)
+			where := ""
+			if a.File != "" {
+				where = " in " + a.File
+			}
+			return fmt.Errorf("account %s: doppel.folder %q%s: %w (fix it in the account file, or run `doppel unbind`)", a.ID, f, where, err)
 		}
 	}
 	return nil

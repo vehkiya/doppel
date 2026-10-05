@@ -25,6 +25,11 @@ func (a *app) cmdUninstall(args []string) int {
 	if err := a.confirm(question, w.assumeYes()); err != nil {
 		return a.fail(err)
 	}
+	if !w.dryRun {
+		if err := a.lockWrites(); err != nil {
+			return a.fail(err)
+		}
+	}
 	p, err := plan.New()
 	if err != nil {
 		return a.fail(err)

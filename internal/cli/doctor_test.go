@@ -33,6 +33,24 @@ func TestDoctorOnAHealthySetup(t *testing.T) {
 	}
 }
 
+func TestDoctorSeesWhatGitSees(t *testing.T) {
+	s := doctorSandbox(t)
+	// A line Git rejects, in a file only Git reads. doppel's own calls ignore
+	// the user's config, so only a check run as the user finds it.
+	s.Write(".config/doppel/index.gitconfig", s.Read(".config/doppel/index.gitconfig")+"[includeIf \"gitdir:~/a\"b/\"]\n\tpath = x\n")
+	s.mustFail(1, "doctor")
+	out := s.stdout.String()
+	if !strings.Contains(out, "Git can't read your global config") || !strings.Contains(out, "bad config line") {
+		t.Errorf("doctor doesn't report that Git can't read the config:\n%s", out)
+	}
+
+	// --fix rewrites the index, and Git can read the config again.
+	s.mustRun("doctor", "--fix")
+	if out := s.stdout.String(); !strings.Contains(out, "Git reads your global config") || strings.Contains(out, "✗") {
+		t.Errorf("doctor --fix:\n%s", out)
+	}
+}
+
 func TestDoctorFindsProblems(t *testing.T) {
 	cases := []struct {
 		name  string

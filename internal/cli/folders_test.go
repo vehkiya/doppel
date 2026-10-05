@@ -130,16 +130,34 @@ func TestHandEditedFoldersAreValidated(t *testing.T) {
 		t.Run(folder, func(t *testing.T) {
 			s := newSandbox(t)
 			s.addAccount("personal", "jane@personal.dev")
-			before := s.Read(".config/doppel/index.gitconfig")
 			if _, err := git.Run(s.Home, "config", "--file", s.Path(accountsDir+"personal.gitconfig"), "--add", accounts.KeyFolder, folder); err != nil {
 				t.Fatal(err)
 			}
+			index, global := s.Read(".config/doppel/index.gitconfig"), s.Read(".gitconfig")
 
 			if stderr := s.mustFail(1, "default", "personal"); !strings.Contains(stderr, "doppel.folder") {
 				t.Errorf("error doesn't say what to fix: %s", stderr)
 			}
-			if got := s.Read(".config/doppel/index.gitconfig"); got != before {
+			// doctor --fix goes through the same checks, and says which file and value.
+			s.mustFail(1, "doctor", "--fix")
+			out := s.stdout.String()
+			for _, want := range []string{"Can't bring doppel's files up to date", "doppel.folder", folder, "personal.gitconfig"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("doctor --fix output is missing %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(out, "Updated") {
+				t.Errorf("doctor --fix wrote a file:\n%s", out)
+			}
+			if got := s.Read(".config/doppel/index.gitconfig"); got != index {
 				t.Errorf("index was rewritten with the bad folder:\n%s", got)
+			}
+			if got := s.Read(".gitconfig"); got != global {
+				t.Errorf("global config was rewritten:\n%s", got)
+			}
+			// Git can still read everything.
+			if _, err := git.Run(s.Home, "config", "--global", "--includes", "--list"); err != nil {
+				t.Errorf("Git can't read the config: %v", err)
 			}
 		})
 	}

@@ -10,6 +10,8 @@ import (
 // gh-hosts (hosts gh is signed in to), gh-users (signed-in users),
 // gh-scopes-<user>, gh-active, and gh-keys-<user>-<kind> (the keys GitHub
 // has). Each call is recorded in gh-calls, with the GH_HOST it ran against.
+// Like gh, it matches user names exactly. A file named gh-old makes it a gh
+// too old to know `auth status --json`.
 const fakeGH = `echo "GH_HOST=$GH_HOST $*" >> "$HOME/gh-calls"
 u="${GH_TOKEN#token-}"
 case "$1 $2" in
@@ -22,6 +24,25 @@ case "$1 $2" in
   if [ -z "$user" ]; then echo "token-active"; exit 0; fi
   grep -qx "$user" "$HOME/gh-users" 2>/dev/null || { echo "no oauth token found for $user" >&2; exit 1; }
   echo "token-$user" ;;
+"auth status")
+  [ -e "$HOME/gh-old" ] && { echo "unknown flag: --json" >&2; exit 1; }
+  h=""; shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in --hostname) h="$2"; shift 2 ;; *) shift ;; esac
+  done
+  printf '{"hosts":{'
+  if grep -qx "$h" "$HOME/gh-hosts" 2>/dev/null; then
+    printf '"%s":[' "$h"; first=1
+    while read -r name; do
+      [ -n "$name" ] || continue
+      [ $first = 1 ] || printf ','
+      first=0; active=false
+      [ "$name" = "$(cat "$HOME/gh-active" 2>/dev/null)" ] && active=true
+      printf '{"state":"success","active":%s,"host":"%s","login":"%s","scopes":"%s"}' "$active" "$h" "$name" "$(cat "$HOME/gh-scopes-$name" 2>/dev/null)"
+    done < "$HOME/gh-users"
+    printf ']'
+  fi
+  printf '}}\n' ;;
 "api -i")
   printf 'HTTP/2.0 200 OK\nX-Oauth-Scopes: %s\n\n{"login":"%s"}\n' "$(cat "$HOME/gh-scopes-$u" 2>/dev/null)" "$u" ;;
 "api --paginate")
@@ -178,4 +199,97 @@ func TestUploadToGitHubEnterprise(t *testing.T) {
 			t.Errorf("export steps:\n%s", out)
 		}
 	})
+}
+
+func TestUploadUsesGHsSpellingOfTheUser(t *testing.T) {
+	s := githubSandbox(t)
+	s.mustRun("edit", "work", "--github-user", "Jane-Acme")
+	pub := strings.Join(strings.Fields(s.Read(".ssh/id_work.pub"))[:2], " ")
+
+	// gh matches names exactly, and signs in as jane-acme.
+	out := s.mustRun("upload", "work")
+	if !strings.Contains(out, "Added ~/.ssh/id_work.pub to jane-acme's authentication keys") {
+		t.Errorf("upload output:\n%s", out)
+	}
+	if got := strings.TrimSpace(s.Read("gh-keys-jane-acme-authentication")); got != pub {
+		t.Errorf("GitHub's keys = %q, want the work key", got)
+	}
+	if !strings.Contains(out, "doppel edit work --github-user jane-acme") {
+		t.Errorf("no hint to correct the stored spelling:\n%s", out)
+	}
+	if got := loadAccount(t, s, "work").GitHubUser; got != "Jane-Acme" {
+		t.Errorf("without a terminal, the stored user changed to %q", got)
+	}
+
+	t.Run("a terminal offers to correct it", func(t *testing.T) {
+		s.tty = true
+		s.stdin = "y\n"
+		s.mustRun("upload", "work")
+		if got := loadAccount(t, s, "work").GitHubUser; got != "jane-acme" {
+			t.Errorf("stored GitHub user = %q after accepting", got)
+		}
+		s.stdin = ""
+		if out := s.mustRun("upload", "work"); strings.Contains(out, "spells the user") {
+			t.Errorf("offered again although the spelling is right:\n%s", out)
+		}
+	})
+	t.Run("declining keeps it", func(t *testing.T) {
+		s.mustRun("edit", "work", "--github-user", "JANE-ACME")
+		s.tty = true
+		s.stdin = "n\n"
+		s.mustRun("upload", "work")
+		if got := loadAccount(t, s, "work").GitHubUser; got != "JANE-ACME" {
+			t.Errorf("stored GitHub user = %q after declining", got)
+		}
+	})
+}
+
+func TestUploadWorksForAnAccountGHIsNotUsing(t *testing.T) {
+	s := githubSandbox(t)
+	s.Write("gh-users", "jane-personal\njane-acme\n")
+	s.Write("gh-active", "jane-personal\n")
+	out := s.mustRun("upload", "work")
+	if !strings.Contains(out, "Added ~/.ssh/id_work.pub to jane-acme's authentication keys") {
+		t.Errorf("upload output:\n%s", out)
+	}
+	if s.Exists("gh-keys-jane-personal-authentication") {
+		t.Error("a key went to gh's active account instead")
+	}
+}
+
+func TestUploadSaysWhyGHRefusedAndWhatItKnows(t *testing.T) {
+	t.Run("the accounts gh has", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.Write("gh-users", "jane-personal\nsomeone-else\n")
+		s.mustRun("upload", "work")
+		if got := s.stderr.String(); !strings.Contains(got, "gh isn't signed in to github.com as jane-acme; gh has jane-personal, someone-else on github.com") {
+			t.Errorf("stderr:\n%s", got)
+		}
+	})
+	t.Run("gh has none on the host", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.Write("gh-users", "")
+		s.mustRun("upload", "work")
+		if got := s.stderr.String(); !strings.Contains(got, "gh has no accounts on github.com") {
+			t.Errorf("stderr:\n%s", got)
+		}
+	})
+	t.Run("a gh too old to list accounts gives its own reason", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.Write("gh-old", "")
+		s.Write("gh-users", "someone-else\n")
+		s.mustRun("upload", "work")
+		if got := s.stderr.String(); !strings.Contains(got, "gh isn't signed in to github.com as jane-acme (no oauth token found for jane-acme)") {
+			t.Errorf("stderr:\n%s", got)
+		}
+	})
+}
+
+func TestUploadWithAnOlderGH(t *testing.T) {
+	s := githubSandbox(t)
+	s.Write("gh-old", "")
+	out := s.mustRun("upload", "work")
+	if !strings.Contains(out, "Added ~/.ssh/id_work.pub to jane-acme's authentication keys") {
+		t.Errorf("upload output:\n%s", out)
+	}
 }

@@ -114,11 +114,12 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - **Pointing gh at a host:** `GH_HOST` targets each host.
   - **Unrecognized hosts:** if no host is recognized, doppel suggests `gh auth login -h <host>` for an Enterprise Server, or `export` for anything else.
   - Runs with the token from `gh auth token --user <username>`, so the key goes to the account's GitHub user without switching gh's active account.
+  - **The user's spelling:** gh matches user names exactly, so doppel first reads the signed-in accounts from `gh auth status --hostname <host> --json hosts` (which prints no tokens), finds the account's user ignoring case, and gives gh its spelling. A gh too old to have `--json` is given the name as stored. When the stored name differs from GitHub's only in capitals, `upload` offers to correct it in a terminal, and otherwise prints the `doppel edit` command that does.
 - **R5.2** Before uploading, doppel checks:
   - **Already uploaded?** It compares against `gh api user/keys` and `user/ssh_signing_keys`, and reports "already on GitHub" instead of failing.
   - **Token scopes:** the token must have `admin:public_key` (or `write:public_key`) for auth keys, and `admin:ssh_signing_key` (or `write:ssh_signing_key`) for signing keys. If one is missing, doppel prints the exact command to add it. gh only refreshes its active account, so for another account the command switches to it, refreshes, and switches back.
   - **The right user:** doppel checks the token really belongs to the account's GitHub user. `GH_TOKEN`, `GITHUB_TOKEN`, their `_ENTERPRISE_` forms and `GH_HOST` in the environment are ignored, so they can't send keys to a different account or host.
-  - **Signed in:** if gh isn't installed or isn't signed in as that user, doppel falls back to `export`.
+  - **Signed in:** if gh isn't installed or isn't signed in as that user, doppel falls back to `export`. The warning carries gh's own reason and lists the accounts gh does have on that host.
 - **R5.2a** `upload` needs a GitHub host and a GitHub user; otherwise it says what to do. A key that both logs in and signs is added once as each kind.
   - **One user everywhere:** the account's GitHub user applies to all its GitHub hosts. Separate identities, such as a personal github.com user and an Enterprise Server user, belong in separate accounts.
   - **Same detection elsewhere:** `export`'s GitHub steps (with that host's settings page), `test`'s GitHub-user check, the wizard's GitHub-username question and `doctor`'s note all use it.
@@ -153,7 +154,8 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 - The global Git config includes doppel's index. *(problem)*
 - Nothing after the include sets an identity setting (`user.name`, `user.email`, `user.signingkey`, `gpg.format`, `commit.gpgsign`, `tag.gpgsign`, `core.sshCommand`), which would override every account. *(problem)*
 - doppel's files say what the accounts say: account files, the index, the `allowed_signers` block and the include. A hand edit to `core.sshCommand` in an account file shows up here. *(warning)*
-- `--fix` rewrites exactly these files, through the same plan as any save, so they match the accounts again. It also restores a missing include. It doesn't touch anything else.
+- Git itself can read the global config and everything it includes (`git config --global --includes --list`, run with the user's own config, unlike doppel's other Git calls). A bad line in a file doppel wrote, or in any file it includes, makes every Git command fail, and only this check sees it. *(problem)*
+- `--fix` rewrites exactly these files, through the same plan and the same validation as any save (R8.2a), so they match the accounts again. It refuses, naming the file and the value, when an account file holds a folder doppel wouldn't write (R2.5). It also restores a missing include. It doesn't touch anything else.
 
 **Each account**
 - **Keys:**
@@ -179,7 +181,13 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - If it's found in another global file, doppel moves it. For example, `~/.config/git/config` may hold the include from before `~/.gitconfig` existed.
   - With `GIT_CONFIG_GLOBAL` set, that file is used exactly as Git uses it, without expanding `~`.
 - **R8.2** Every write is atomic (a temporary file in the same directory, then a rename), preserves the file's mode and symlinks (including a dangling symlink, whose target is created), and keeps a hidden backup of the previous version alongside it (`.gitconfig.doppel.bak`), like sshx.
-  - A command takes all its backups before replacing any file, and removes files only after every write has succeeded. A failure partway can leave an extra file behind, but never a folder rule pointing at a missing account file.
+  - A command takes all its backups before replacing any file, writes next, and removes files last, so a folder rule never points at a missing account file.
+  - **A failed write is rolled back.** If any step fails, doppel puts back what it already did: replaced files get their old content, created files are deleted, and the backups return to how they were. The error says so, or, if a restore failed too, lists what to put back by hand. After a failure every file is as it was, and running the command again works once the cause (such as a read-only global config) is fixed.
+- **R8.2a** Accounts reach disk only through `store.Save`, which validates first (R2.5, one default, unique IDs, each folder bound once) and is used by every command and by `doctor --fix`.
+- **R8.2b** Concurrent and stale writes:
+  - **Lock:** writes take an advisory lock on `~/.config/doppel/.lock` (`flock`). A command that can't ask anything (no terminal) takes it before loading the accounts, so concurrent commands run one after the other. One that may ask, such as a wizard or a confirmation, takes it only for the final save, so a prompt never keeps other commands waiting. A command that waits more than 15 seconds for the lock gives up and says so.
+  - **Stale reads:** a command remembers what each account file held when it loaded it. Before writing, it fails with "… changed since it was read; run the command again" when a file was edited, deleted, or added since, and `Apply` makes the same check against the content each file was staged from. Nothing is overwritten.
+  - **Explicit removals:** only `rm` (the account it was given) and `rename` (the old file) delete an account file. An account file the command didn't load is never deleted.
 - **R8.3** Key files are never overwritten or deleted. Generating a key at an existing path is refused.
 - **R8.4** `--dry-run` on any command that writes shows the file changes it would make, without writing.
 - **R8.5** `doppel uninstall` removes the include block and the `allowed_signers` block from every global config file, leaving the account files and keys in place. If Git has since added other `include.path` lines to doppel's `[include]` section, only doppel's path is removed.
@@ -344,8 +352,8 @@ Every account file sets every setting doppel manages, including a "reset" value 
     cli/       commands, flags, prompts, whoami, the wizards, and the loop around the browser
     tui/       the account browser (picks an action; cli carries it out)
     accounts/  the Account model, its managed settings, loading and validation
-    store/     writing accounts: account files, the generated index, the global include
-    plan/      staged writes with backups and atomic replacement (what --dry-run previews)
+    store/     writing accounts: validation, account files, the generated index, the global include, the write lock
+    plan/      staged writes with backups, atomic replacement and rollback (what --dry-run previews)
     paths/     where files live; normalizing and matching folders
     git/       running git; reading and writing Git config files through it
     keys/      reading, generating and checking SSH keys; the login and signing checks
@@ -360,7 +368,9 @@ Every account file sets every setting doppel manages, including a "reset" value 
 ### 6.7 Testing
 
 - Every test runs in a sandbox: a temporary `HOME`, `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL`, with `GIT_CONFIG_NOSYSTEM=1`.
-- Fake `ssh`, `ssh-keygen` (where real key generation isn't needed) and `gh` executables on `PATH` record calls and return canned output.
+- Fake `ssh`, `ssh-keygen` (where real key generation isn't needed) and `gh` executables on `PATH` record calls and return canned output. Every sandbox starts with a `gh` that is signed in nowhere, and with the `GH_*` and `GITHUB_*` variables cleared, so the real `gh` is never run; a test that needs a signed-in `gh` installs its own.
+- Failure-injection tests cover `plan` (a failure at every write, backup and removal step, and a failed rollback), stale content, and `doctor --fix` with every kind of bad folder.
+- Wizard tests run both ways: through the line-by-line accessible prompts, and through the single form with scripted keystrokes (hidden pages, choices that follow earlier answers, going back).
 - Integration tests run real `git` against sandboxed repos:
   - folder precedence
   - clones into bound folders
@@ -368,12 +378,12 @@ Every account file sets every setting doppel manages, including a "reset" value 
   - leak-proofing between the default and folder accounts
   - anything placed after the include block in the global config
 - Table tests cover path normalization and rule ordering. The generated files are compared against saved expected output.
-- CI runs on Linux and macOS (macOS for `gitdir/i:` and its case-insensitive filesystem).
+- CI runs on Linux and macOS (macOS for `gitdir/i:` and its case-insensitive filesystem), and on Linux in an Ubuntu 22.04 container, whose Git 2.34.1 is the minimum doppel supports.
 
 ### 6.8 Distribution
 
 - `go install github.com/vehkiya/doppel@latest`, plus GitHub release binaries for Linux and macOS (amd64 and arm64), adapted from sshx's workflows.
-  - **Validation:** every PR is linted and tested on Linux, and tested on macOS (for `gitdir/i:` and its case-insensitive filesystem).
+  - **Validation:** every PR is linted and tested on Linux, tested on macOS (for `gitdir/i:` and its case-insensitive filesystem), and tested against Git 2.34 (Ubuntu 22.04).
   - **Releases:** every merge to `main` that changes the version gets a release. The version comes from Conventional Commits: `feat` bumps the minor version, anything else the patch, and `!` or `BREAKING CHANGE` the major.
   - **Verification:** releases carry SHA-256 checksums signed with the release key, and GitHub build provenance (`gh attestation verify`).
   - **Signing:** the signing key exists only as the `DOPPEL_SIGNING_KEY` secret in the `release` environment, which only `main` can deploy to. The workflow refuses to publish unsigned, or to sign with a key that isn't in `TrustedKeys`.

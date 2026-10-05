@@ -99,7 +99,7 @@ func (a *app) cmdAdd(args []string) int {
 	if err := accounts.ValidateID(id); err != nil {
 		return a.fail(err)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -154,7 +154,7 @@ func (a *app) cmdEdit(args []string) int {
 	if len(positional) != 1 {
 		return a.usageError(editUsage)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -223,7 +223,7 @@ func (a *app) cmdRm(args []string) int {
 	if len(positional) != 1 {
 		return a.usageError(rmUsage)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -247,7 +247,7 @@ func (a *app) cmdRm(args []string) int {
 			return a.fail(err)
 		}
 	}
-	code = a.save(rest, w, fmt.Sprintf("Deleted account %s", acc.ID))
+	code = a.saveRemoving([]*accounts.Account{acc}, rest, w, fmt.Sprintf("Deleted account %s", acc.ID))
 	if code == 0 && acc.Default && accounts.Default(rest) == nil && len(rest) > 0 && !w.dryRun {
 		a.notef("There's no default account now. Choose one with: doppel default <id>")
 	}
@@ -291,7 +291,7 @@ func (a *app) cmdRename(args []string) int {
 	if err := accounts.ValidateID(newID); err != nil {
 		return a.fail(err)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -321,7 +321,7 @@ func (a *app) cmdDefault(args []string) int {
 	if len(positional) > 1 || (none && len(positional) > 0) {
 		return a.usageError(defaultUsage)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}
