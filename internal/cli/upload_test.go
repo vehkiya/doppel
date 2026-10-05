@@ -11,10 +11,13 @@ import (
 // gh-scopes-<user>, gh-active, and gh-keys-<user>-<kind> (the keys GitHub
 // has). Each call is recorded in gh-calls, with the GH_HOST it ran against.
 // Like gh, it matches user names exactly. A file named gh-old makes it a gh
-// too old to know `auth status --json`.
+// too old to know `auth status --json`, and gh-version sets the version it
+// reports.
 const fakeGH = `echo "GH_HOST=$GH_HOST $*" >> "$HOME/gh-calls"
 u="${GH_TOKEN#token-}"
 case "$1 $2" in
+"--version ")
+  echo "gh version $(cat "$HOME/gh-version" 2>/dev/null || echo 2.102.0) (2026-09-30)" ;;
 "auth token")
   h=""; user=""; shift 2
   while [ $# -gt 0 ]; do
@@ -25,11 +28,15 @@ case "$1 $2" in
   grep -qx "$user" "$HOME/gh-users" 2>/dev/null || { echo "no oauth token found for $user" >&2; exit 1; }
   echo "token-$user" ;;
 "auth status")
-  [ -e "$HOME/gh-old" ] && { echo "unknown flag: --json" >&2; exit 1; }
-  h=""; shift 2
+  h=""; json=""; shift 2
   while [ $# -gt 0 ]; do
-    case "$1" in --hostname) h="$2"; shift 2 ;; *) shift ;; esac
+    case "$1" in --hostname) h="$2"; shift 2 ;; --json) json=1; shift 2 ;; *) shift ;; esac
   done
+  if [ -z "$json" ]; then
+    grep -qx "$h" "$HOME/gh-hosts" 2>/dev/null || { echo "You are not logged into any accounts on $h" >&2; exit 1; }
+    echo "Logged in to $h"; exit 0
+  fi
+  [ -e "$HOME/gh-old" ] && { echo "unknown flag: --json" >&2; exit 1; }
   printf '{"hosts":{'
   if grep -qx "$h" "$HOME/gh-hosts" 2>/dev/null; then
     printf '"%s":[' "$h"; first=1
@@ -199,6 +206,59 @@ func TestUploadToGitHubEnterprise(t *testing.T) {
 			t.Errorf("export steps:\n%s", out)
 		}
 	})
+}
+
+func TestGitHubHostDetectionNeverReadsAToken(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		t.Run(map[bool]string{false: "current gh", true: "gh without auth status --json"}[old], func(t *testing.T) {
+			s := githubSandbox(t)
+			if old {
+				s.Write("gh-old", "")
+			}
+			s.Write("gh-hosts", "github.com\ngit.acme.com\n")
+			s.mustRun("edit", "work", "--host", "git.acme.com", "--host", "codeberg.org")
+			// A second account on the same hosts: doctor checks both.
+			s.mustRun("add", "client", "--name", "Jane", "--email", "jane@client.dev", "--host", "codeberg.org", "--host", "git.acme.com", "--auth-key", "")
+			// Each command asks gh about a host at most once, and never for a token.
+			checkCalls := func(command string) {
+				t.Helper()
+				calls := strings.Split(strings.TrimSpace(s.Read("gh-calls")), "\n")
+				seen := map[string]bool{}
+				for _, c := range calls {
+					if strings.Contains(c, "auth token") {
+						t.Errorf("%s read a token to find out which hosts are GitHub:\n%s", command, strings.Join(calls, "\n"))
+					}
+					if seen[c] {
+						t.Errorf("%s asked gh the same thing twice: %s", command, c)
+					}
+					seen[c] = true
+				}
+				s.Write("gh-calls", "")
+			}
+			s.Write("gh-calls", "")
+			if out := s.mustRun("export", "work", "--no-copy"); !strings.Contains(out, "https://git.acme.com/settings/ssh/new") {
+				t.Errorf("export doesn't treat git.acme.com as GitHub:\n%s", out)
+			}
+			checkCalls("export")
+			s.run("doctor")
+			checkCalls("doctor")
+		})
+	}
+}
+
+func TestUploadNeedsAGHThatCanPickTheAccount(t *testing.T) {
+	s := githubSandbox(t)
+	s.Write("gh-version", "2.39.2")
+	out := s.mustRun("upload", "work")
+	if got := s.stderr.String(); !strings.Contains(got, "doppel needs gh 2.40 or newer to use the account's own token, and this gh is 2.39.2") {
+		t.Errorf("warning:\n%s", got)
+	}
+	if !strings.Contains(out, "https://github.com/settings/ssh/new") {
+		t.Errorf("no steps to add the keys by hand:\n%s", out)
+	}
+	if calls := s.Read("gh-calls"); strings.Contains(calls, "auth token") || strings.Contains(calls, "ssh-key add") {
+		t.Errorf("an old gh was still asked for a token or to add keys:\n%s", calls)
+	}
 }
 
 func TestUploadUsesGHsSpellingOfTheUser(t *testing.T) {

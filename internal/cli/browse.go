@@ -21,11 +21,13 @@ import (
 func (a *app) browse() int {
 	selected, status := "", ""
 	for {
+		a.githubHosts = nil // gh may have signed in to a host since the browser last opened
 		list, err := accounts.Load(a.env)
 		if err != nil {
 			return a.fail(err)
 		}
-		act, err := tui.Run(tui.Options{Env: a.env, Accounts: list, KeyInfo: a.keyInfo(list), Selected: selected, Status: status,
+		act, err := tui.Run(tui.Options{Env: a.env, Accounts: list, LoadKeyInfo: func() map[string]tui.KeyInfo { return a.keyInfo(list) },
+			Selected: selected, Status: status,
 			CheckUpdate: a.updateCheck()})
 		if err != nil {
 			return a.fail(err)

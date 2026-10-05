@@ -19,12 +19,14 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves apart from `atomicfile`, which `plan` and `update` share; `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves apart from two shared helpers: `atomicfile` (`plan`, `update`) and `proc` (`git`, `keys`, `github`, `cli`). `ui` only uses `plan.Change`. Nothing imports `cli`.
 * Export only what another package needs. The end-to-end tests in `cli` count as another package: they use `store`'s include helpers to check the global config. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
 * doppel is a single static binary: the Go standard library plus the Charm libraries (`bubbletea`, `bubbles`, `huh`, `lipgloss`). No CGO.
-* At runtime it calls `git`, `ssh`, `ssh-keygen`, `ssh-add` and, optionally, `gh`. Nothing else.
+* At runtime it calls `git`, `ssh`, `ssh-keygen`, `ssh-add` and, optionally, `gh` (2.40 or newer). Nothing else.
+* **Run tools through `proc.Command`** with a time limit (`proc.Local` or `proc.Network`), so a hung agent or a silent server can't freeze doppel. Only a command that may ask the user something, such as `ssh-keygen` asking for a passphrase, runs without one.
+* **Don't fetch a token to answer a question:** whether a host is GitHub comes from `gh auth status`, which never prints one, and `cli` remembers the answer for the rest of the command (`app.apiHost`).
 
 ### 2.2 Git config integrity
 * **Git is the authority on its config format.** Read and write Git config through `git config --file` (`git.ReadConfigFile`, `git.ConfigFile`, and `reconcile` in `store`). The only text doppel writes itself is the generated index and the include block, which it fully controls.

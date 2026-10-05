@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/vehkiya/doppel/internal/proc"
 )
 
 // LoginResult is what a host said when a key tried to log in.
@@ -52,11 +54,24 @@ func Login(host, key string, batch bool) LoginResult {
 	}
 	args = append(args, "git@"+host)
 	// Hosts refuse a shell, so ssh exits with an error even when the key
-	// works; the reply says what happened.
-	out, _ := exec.Command("ssh", args...).CombinedOutput() //nolint:gosec // fixed binary; arguments built by doppel
+	// works; the reply says what happened. In batch mode nothing can be
+	// waiting on the user, so a hang means something is wrong.
+	var out []byte
+	res := LoginResult{Host: host}
+	if batch {
+		cmd, finish := proc.Command(proc.Network, "ssh", args...)
+		var err error
+		out, err = cmd.CombinedOutput()
+		var timeout *proc.TimeoutError
+		if errors.As(finish(err), &timeout) {
+			res.Problem = timeout.Error()
+			return res
+		}
+	} else {
+		out, _ = exec.Command("ssh", args...).CombinedOutput() //nolint:gosec // fixed binary; arguments built by doppel
+	}
 	reply := strings.TrimSpace(string(out))
 
-	res := LoginResult{Host: host}
 	if user, ok := ParseGreeting(reply); ok {
 		res.User, res.Accepted = user, true
 		return res
@@ -98,6 +113,7 @@ func SignCheck(key, email, allowedSigners string) error {
 		return err
 	}
 
+	// Signing may ask for the key's passphrase, so it has no time limit.
 	sign := exec.Command("ssh-keygen", "-Y", "sign", "-n", "git", "-f", key, msg) //nolint:gosec // fixed binary; arguments built by doppel
 	var stderr bytes.Buffer
 	sign.Stderr = &stderr
@@ -110,11 +126,11 @@ func SignCheck(key, email, allowedSigners string) error {
 		return err
 	}
 	defer func() { _ = input.Close() }()
-	verify := exec.Command("ssh-keygen", "-Y", "verify", "-f", allowedSigners, "-I", email, "-n", "git", "-s", msg+".sig") //nolint:gosec // fixed binary; arguments built by doppel
+	verify, finish := proc.Command(proc.Local, "ssh-keygen", "-Y", "verify", "-f", allowedSigners, "-I", email, "-n", "git", "-s", msg+".sig")
 	verify.Stdin = input
 	var out bytes.Buffer
 	verify.Stdout, verify.Stderr = &out, &out
-	if err := verify.Run(); err != nil {
+	if err := finish(verify.Run()); err != nil {
 		return fmt.Errorf("signed, but Git couldn't verify it as %s: %s", email, lastLine(out.String(), err))
 	}
 	return nil
@@ -137,7 +153,9 @@ var opensshVersion = regexp.MustCompile(`OpenSSH_(\d+)\.(\d+)`)
 
 // OpenSSHVersion returns the installed OpenSSH's major and minor version.
 func OpenSSHVersion() (major, minor int, ok bool) {
-	out, _ := exec.Command("ssh", "-V").CombinedOutput() // ssh -V prints to stderr
+	cmd, finish := proc.Command(proc.Local, "ssh", "-V")
+	out, err := cmd.CombinedOutput() // ssh -V prints to stderr
+	_ = finish(err)
 	m := opensshVersion.FindStringSubmatch(string(out))
 	if m == nil {
 		return 0, 0, false
@@ -154,8 +172,9 @@ func OpenSSHVersion() (major, minor int, ok bool) {
 // handled as ssh handles them.
 func HostIdentityFiles(sshConfig, host string) []string {
 	files := func(h string) []string {
-		out, err := exec.Command("ssh", "-G", "-F", sshConfig, h).Output() //nolint:gosec // fixed binary; arguments built by doppel
-		if err != nil {
+		cmd, finish := proc.Command(proc.Local, "ssh", "-G", "-F", sshConfig, h)
+		out, err := cmd.Output()
+		if err := finish(err); err != nil {
 			return nil
 		}
 		var list []string

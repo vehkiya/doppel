@@ -66,7 +66,7 @@ Once installed, `doppel update` keeps it current.
 
 With [configsh](https://github.com/vehkiya/configsh), `./setup.sh` installs doppel and sets up the `dop` alias.
 
-doppel needs Git 2.34 or newer and OpenSSH 8.2 or newer. `gh` is optional; it's only needed for `doppel upload`.
+doppel needs Git 2.34 or newer and OpenSSH 8.2 or newer. `gh` 2.40 or newer is optional; it's only needed for `doppel upload`.
 
 ---
 

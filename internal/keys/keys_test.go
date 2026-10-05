@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/proc"
 	"github.com/vehkiya/doppel/internal/testenv"
 )
 
@@ -164,5 +166,32 @@ func TestSignCheck(t *testing.T) {
 	locked := s.Key("id_locked", "jane@acme.com", "a passphrase")
 	if err := keys.SignCheck(locked+".pub", "jane@acme.com", signers); err == nil || !strings.Contains(err.Error(), "couldn't sign") {
 		t.Errorf("SignCheck with a locked key: %v", err)
+	}
+}
+
+func TestToolsThatHangAreStopped(t *testing.T) {
+	s := testenv.New(t)
+	key := s.Key("id_work", "jane@acme.com", "")
+	old := proc.Local
+	proc.Local = 200 * time.Millisecond
+	t.Cleanup(func() { proc.Local = old })
+	oldNet := proc.Network
+	proc.Network = 200 * time.Millisecond
+	t.Cleanup(func() { proc.Network = oldNet })
+	// An agent that stopped answering, and a host that accepts the
+	// connection but never replies.
+	s.FakeCommand("ssh-add", "sleep 30")
+	s.FakeCommand("ssh", "sleep 30")
+
+	start := time.Now()
+	if loaded, running := keys.InAgent(key); loaded || running {
+		t.Errorf("InAgent = %v, %v; want no answer from a hung agent", loaded, running)
+	}
+	res := keys.Login("github.com", key, true)
+	if res.Accepted || !strings.Contains(res.Problem, "ssh didn't finish within 200ms") {
+		t.Errorf("Login = %+v, want it stopped with a message naming ssh", res)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("took %s; the tools weren't stopped", elapsed)
 	}
 }

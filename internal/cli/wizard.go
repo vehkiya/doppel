@@ -164,18 +164,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 
 	sshDir := filepath.Join(a.env.Home, ".ssh")
 	discovered := keys.Discover(sshDir)
-	githubHost := map[string]bool{} // isGitHub may ask gh, so remember its answers
-	anyGitHub := func() bool {
-		for _, h := range splitList(ans.Hosts) {
-			if _, seen := githubHost[h]; !seen {
-				githubHost[h] = isGitHub(h)
-			}
-			if githubHost[h] {
-				return true
-			}
-		}
-		return false
-	}
+	anyGitHub := func() bool { return slices.ContainsFunc(splitList(ans.Hosts), a.isGitHub) }
 	prevID, prevName, prevEmail := acc.ID, acc.Name, acc.Email
 
 	var identity []huh.Field

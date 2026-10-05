@@ -10,8 +10,8 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/accounts"
-	"github.com/vehkiya/doppel/internal/github"
 	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/proc"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
@@ -84,7 +84,7 @@ func (a *app) cmdExport(args []string) int {
 	for _, h := range acc.Hosts {
 		a.printf("%s\n", ui.Accent.Render(h))
 		for _, k := range exported {
-			for i, step := range hostSteps(h, k, title) {
+			for i, step := range a.hostSteps(h, k, title) {
 				a.printf("  %d. %s\n", i+1, step)
 			}
 		}
@@ -123,8 +123,8 @@ func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([
 }
 
 // hostSteps says where to add a key on a host, and which key type to pick.
-func hostSteps(host string, k exportedKey, title string) []string {
-	if api, ok := github.APIHost(host); ok {
+func (a *app) hostSteps(host string, k exportedKey, title string) []string {
+	if api, ok := a.apiHost(host); ok {
 		steps := []string{"Open https://" + api + "/settings/ssh/new", "Title: " + title}
 		switch {
 		case k.auth && k.signing:
@@ -176,9 +176,9 @@ func copyToClipboard(text string) error {
 		if _, err := exec.LookPath(tool[0]); err != nil {
 			continue
 		}
-		cmd := exec.Command(tool[0], tool[1:]...) //nolint:gosec // fixed clipboard tools
+		cmd, finish := proc.Command(proc.Local, tool[0], tool[1:]...)
 		cmd.Stdin = strings.NewReader(text)
-		if cmd.Run() == nil {
+		if finish(cmd.Run()) == nil {
 			return nil
 		}
 	}
