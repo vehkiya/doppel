@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/github"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/ui"
 )
@@ -123,9 +124,8 @@ func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([
 
 // hostSteps says where to add a key on a host, and which key type to pick.
 func hostSteps(host string, k exportedKey, title string) []string {
-	switch {
-	case strings.EqualFold(host, "github.com"):
-		steps := []string{"Open https://github.com/settings/ssh/new", "Title: " + title}
+	if api, ok := github.APIHost(host); ok {
+		steps := []string{"Open https://" + api + "/settings/ssh/new", "Title: " + title}
 		switch {
 		case k.auth && k.signing:
 			steps = append(steps, "Key type: Authentication Key. Then add it a second time with Key type: Signing Key.")
@@ -135,7 +135,9 @@ func hostSteps(host string, k exportedKey, title string) []string {
 			steps = append(steps, "Key type: Signing Key")
 		}
 		return append(steps, "Paste the key and click Add SSH key.")
+	}
 
+	switch {
 	case strings.Contains(strings.ToLower(host), "gitlab"):
 		usage := "Signing"
 		switch {

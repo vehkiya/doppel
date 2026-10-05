@@ -7,14 +7,21 @@ import (
 )
 
 // fakeGH stands in for gh. Its state lives in files in the sandbox:
-// gh-users (signed-in users, one per line), gh-scopes-<user>, gh-active,
-// and gh-keys-<user>-<kind> (the keys GitHub has). Calls go to gh-calls.
-const fakeGH = `echo "$@" >> "$HOME/gh-calls"
+// gh-hosts (hosts gh is signed in to), gh-users (signed-in users),
+// gh-scopes-<user>, gh-active, and gh-keys-<user>-<kind> (the keys GitHub
+// has). Each call is recorded in gh-calls, with the GH_HOST it ran against.
+const fakeGH = `echo "GH_HOST=$GH_HOST $*" >> "$HOME/gh-calls"
 u="${GH_TOKEN#token-}"
 case "$1 $2" in
 "auth token")
-  grep -qx "$6" "$HOME/gh-users" 2>/dev/null || { echo "no oauth token found for $6" >&2; exit 1; }
-  echo "token-$6" ;;
+  h=""; user=""; shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in --hostname) h="$2"; shift 2 ;; --user) user="$2"; shift 2 ;; *) shift ;; esac
+  done
+  grep -qx "$h" "$HOME/gh-hosts" 2>/dev/null || { echo "not logged in to $h" >&2; exit 1; }
+  if [ -z "$user" ]; then echo "token-active"; exit 0; fi
+  grep -qx "$user" "$HOME/gh-users" 2>/dev/null || { echo "no oauth token found for $user" >&2; exit 1; }
+  echo "token-$user" ;;
 "api -i")
   printf 'HTTP/2.0 200 OK\nX-Oauth-Scopes: %s\n\n{"login":"%s"}\n' "$(cat "$HOME/gh-scopes-$u" 2>/dev/null)" "$u" ;;
 "api --paginate")
@@ -34,6 +41,7 @@ func githubSandbox(t *testing.T) *sandbox {
 	t.Helper()
 	s := newSandbox(t)
 	s.FakeCommand("gh", fakeGH)
+	s.Write("gh-hosts", "github.com\n")
 	s.Write("gh-users", "jane-acme\n")
 	s.Write("gh-scopes-jane-acme", "admin:public_key, admin:ssh_signing_key, repo")
 	s.Write("gh-active", "jane-acme\n")
@@ -100,7 +108,7 @@ func TestUploadFallsBackToExport(t *testing.T) {
 		s := githubSandbox(t)
 		s.Write("gh-users", "someone-else\n")
 		out := s.mustRun("upload", "work")
-		if !strings.Contains(s.stderr.String(), "gh isn't signed in to GitHub as jane-acme") || !strings.Contains(out, "https://github.com/settings/ssh/new") {
+		if !strings.Contains(s.stderr.String(), "gh isn't signed in to github.com as jane-acme") || !strings.Contains(out, "https://github.com/settings/ssh/new") {
 			t.Errorf("no fallback to manual steps:\nstdout:\n%s\nstderr:\n%s", out, s.stderr.String())
 		}
 	})
@@ -124,7 +132,50 @@ func TestUploadNeedsAGitHubAccount(t *testing.T) {
 		t.Errorf("no hint to set the GitHub user: %s", stderr)
 	}
 	s.mustRun("edit", "work", "--host", "gitlab.com")
-	if stderr := s.mustFail(1, "upload", "work"); !strings.Contains(stderr, "doesn't use github.com") || !strings.Contains(stderr, "doppel export work") {
-		t.Errorf("no hint to export: %s", stderr)
+	if stderr := s.mustFail(1, "upload", "work"); !strings.Contains(stderr, "is GitHub as far as doppel can tell") ||
+		!strings.Contains(stderr, "gh auth login -h <host>") || !strings.Contains(stderr, "doppel export work") {
+		t.Errorf("no hint to sign gh in or export: %s", stderr)
 	}
+}
+
+func TestUploadToGitHubEnterprise(t *testing.T) {
+	t.Run("a GitHub Enterprise Server gh is signed in to", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.mustRun("edit", "work", "--host", "git.acme.com")
+		// Until gh is signed in there, doppel can't tell it's GitHub.
+		s.mustFail(1, "upload", "work")
+		s.Write("gh-hosts", "github.com\ngit.acme.com\n")
+		out := s.mustRun("upload", "work")
+		if !strings.Contains(out, "Added ~/.ssh/id_work.pub to jane-acme on git.acme.com's authentication keys") {
+			t.Errorf("upload output:\n%s", out)
+		}
+		if calls := s.Read("gh-calls"); !strings.Contains(calls, "GH_HOST=git.acme.com ssh-key add") {
+			t.Errorf("keys weren't added on git.acme.com:\n%s", calls)
+		}
+	})
+	t.Run("GitHub Enterprise Cloud with data residency", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.Write("gh-hosts", "acme.ghe.com\n")
+		s.mustRun("edit", "work", "--host", "acme.ghe.com")
+		s.mustRun("upload", "work")
+		if calls := s.Read("gh-calls"); !strings.Contains(calls, "GH_HOST=acme.ghe.com ssh-key add") {
+			t.Errorf("keys weren't added on acme.ghe.com:\n%s", calls)
+		}
+	})
+	t.Run("github.com and ssh.github.com are one GitHub", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.mustRun("edit", "work", "--host", "github.com", "--host", "ssh.github.com")
+		s.mustRun("upload", "work")
+		if n := strings.Count(s.Read("gh-calls"), "ssh-key add"); n != 2 { // one key, added as each kind once
+			t.Errorf("%d keys added, want 2:\n%s", n, s.Read("gh-calls"))
+		}
+	})
+	t.Run("export gives GitHub steps for an Enterprise Server", func(t *testing.T) {
+		s := githubSandbox(t)
+		s.Write("gh-hosts", "github.com\ngit.acme.com\n")
+		s.mustRun("edit", "work", "--host", "git.acme.com")
+		if out := s.mustRun("export", "work", "--no-copy"); !strings.Contains(out, "https://git.acme.com/settings/ssh/new") {
+			t.Errorf("export steps:\n%s", out)
+		}
+	})
 }

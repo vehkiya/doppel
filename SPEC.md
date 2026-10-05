@@ -106,14 +106,23 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 ### R5. Getting keys onto hosts
 
-- **R5.1 `upload` (GitHub):** `gh ssh-key add --type authentication|signing --title "doppel: <account> (<hostname>)"`.
+- **R5.1 `upload` (GitHub):** `gh ssh-key add --type authentication|signing --title "doppel: <account> (<hostname>)"`, on every GitHub host the account uses.
+  - **Which hosts are GitHub:**
+    - `github.com`, which GitHub Enterprise Cloud (including Enterprise Managed Users) shares
+    - its port-443 SSH endpoint `ssh.github.com`
+    - `*.ghe.com` (GitHub Enterprise Cloud with data residency)
+    - any other host `gh` is signed in to. `gh` only signs in to GitHub, so this is how GitHub Enterprise Server is found. The check is a local token lookup; nothing connects.
+  - **Pointing gh at a host:** `GH_HOST` targets each host.
+  - **Unrecognized hosts:** if no host is recognized, doppel suggests `gh auth login -h <host>` for an Enterprise Server, or `export` for anything else.
   - Runs with the token from `gh auth token --user <username>`, so the key goes to the account's GitHub user without switching gh's active account.
 - **R5.2** Before uploading, doppel checks:
   - **Already uploaded?** It compares against `gh api user/keys` and `user/ssh_signing_keys`, and reports "already on GitHub" instead of failing.
   - **Token scopes:** the token must have `admin:public_key` (or `write:public_key`) for auth keys, and `admin:ssh_signing_key` (or `write:ssh_signing_key`) for signing keys. If one is missing, doppel prints the exact command to add it. gh only refreshes its active account, so for another account the command switches to it, refreshes, and switches back.
-  - **The right user:** doppel checks the token really belongs to the account's GitHub user. `GH_TOKEN` and `GITHUB_TOKEN` in the environment are ignored, so they can't send keys to a different account.
+  - **The right user:** doppel checks the token really belongs to the account's GitHub user. `GH_TOKEN`, `GITHUB_TOKEN`, their `_ENTERPRISE_` forms and `GH_HOST` in the environment are ignored, so they can't send keys to a different account or host.
   - **Signed in:** if gh isn't installed or isn't signed in as that user, doppel falls back to `export`.
-- **R5.2a** `upload` needs the account to use `github.com` and to have a GitHub user; otherwise it says what to do (`doppel export` for other hosts, `--github-user` for a missing user). A key that both logs in and signs is added once as each kind.
+- **R5.2a** `upload` needs a GitHub host and a GitHub user; otherwise it says what to do. A key that both logs in and signs is added once as each kind.
+  - **One user everywhere:** the account's GitHub user applies to all its GitHub hosts. Separate identities, such as a personal github.com user and an Enterprise Server user, belong in separate accounts.
+  - **Same detection elsewhere:** `export`'s GitHub steps (with that host's settings page), `test`'s GitHub-user check, the wizard's GitHub-username question and `doctor`'s note all use it.
 - **R5.3 `export` (any host):**
   - Prints the public key and copies it to the clipboard. When two different keys are shown, nothing is copied; `--auth` or `--signing` picks one.
   - Gives step-by-step instructions, including which key type to choose, for GitHub, GitLab (usage type *Authentication*, *Signing*, or *Authentication & Signing*), Gitea/Forgejo, and other hosts.

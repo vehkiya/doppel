@@ -13,9 +13,9 @@ import (
 
 const uploadUsage = "doppel upload <id> [--auth | --signing]"
 
-// cmdUpload adds an account's keys to its GitHub user through gh. Without
-// gh, or when gh isn't signed in as that user, it shows how to add them by
-// hand instead.
+// cmdUpload adds an account's keys to its user on each GitHub host it uses,
+// through gh. Without gh, or when gh isn't signed in as that user, it shows
+// how to add them by hand instead.
 func (a *app) cmdUpload(args []string) int {
 	fs := newFlagSet("upload")
 	var onlyAuth, onlySigning bool
@@ -36,17 +36,10 @@ func (a *app) cmdUpload(args []string) int {
 	if acc == nil {
 		return a.fail(fmt.Errorf("no account named %s", positional[0]))
 	}
-	if !slices.ContainsFunc(acc.Hosts, func(h string) bool { return strings.EqualFold(h, github.Host) }) {
-		return a.fail(fmt.Errorf("account %s doesn't use %s; add its keys by hand with `doppel export %s`", acc.ID, github.Host, acc.ID))
-	}
-	if acc.GitHubUser == "" {
-		return a.fail(fmt.Errorf("doppel needs to know account %s's GitHub user: doppel edit %s --github-user <user>", acc.ID, acc.ID))
-	}
 	exported, err := a.keysToExport(acc, onlyAuth, onlySigning)
 	if err != nil {
 		return a.fail(err)
 	}
-
 	exportArgs := []string{acc.ID}
 	if onlyAuth {
 		exportArgs = append(exportArgs, "--auth")
@@ -54,25 +47,62 @@ func (a *app) cmdUpload(args []string) int {
 	if onlySigning {
 		exportArgs = append(exportArgs, "--signing")
 	}
+
+	apiHosts := githubHosts(acc)
+	if len(apiHosts) == 0 {
+		return a.fail(fmt.Errorf("none of account %s's hosts (%s) is GitHub as far as doppel can tell. If one runs GitHub Enterprise Server, sign gh in to it with `gh auth login -h <host>` and run this again; for other hosts, add the keys by hand with `doppel export %s`",
+			acc.ID, strings.Join(acc.Hosts, ", "), acc.ID))
+	}
+	if acc.GitHubUser == "" {
+		return a.fail(fmt.Errorf("doppel needs to know account %s's GitHub user: doppel edit %s --github-user <user>", acc.ID, acc.ID))
+	}
 	if !github.Available() {
 		a.warnf("gh isn't installed, so here's how to add the keys by hand.\n")
 		return a.cmdExport(exportArgs)
 	}
-	client, err := github.ForUser(acc.GitHubUser)
+
+	for _, apiHost := range apiHosts {
+		code, fallBack := a.uploadTo(apiHost, acc, exported)
+		if fallBack {
+			return a.cmdExport(exportArgs)
+		}
+		if code != 0 {
+			return code
+		}
+	}
+	return 0
+}
+
+// githubHosts lists the hosts gh talks to for the account's GitHub hosts.
+// github.com and ssh.github.com share one.
+func githubHosts(acc *accounts.Account) []string {
+	var apiHosts []string
+	for _, h := range acc.Hosts {
+		if api, ok := github.APIHost(h); ok && !slices.Contains(apiHosts, api) {
+			apiHosts = append(apiHosts, api)
+		}
+	}
+	return apiHosts
+}
+
+// uploadTo adds keys to the account's user on one GitHub host. fallBack is
+// true when gh isn't signed in as that user, so manual steps should follow.
+func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exportedKey) (code int, fallBack bool) {
+	client, err := github.ForUser(apiHost, acc.GitHubUser)
 	if err != nil {
 		var notSignedIn *github.NotSignedInError
 		if errors.As(err, &notSignedIn) {
-			a.warnf("gh isn't signed in to GitHub as %s. Sign in with `gh auth login -h github.com` and pick that account, then run this again. Meanwhile, here's how to add the keys by hand.\n", acc.GitHubUser)
-			return a.cmdExport(exportArgs)
+			a.warnf("gh isn't signed in to %s as %s. Sign in with `gh auth login -h %s` and pick that account, then run this again. Meanwhile, here's how to add the keys by hand.\n", apiHost, acc.GitHubUser, apiHost)
+			return 0, true
 		}
-		return a.fail(err)
+		return a.fail(err), false
 	}
 	login, granted, err := client.Info()
 	if err != nil {
-		return a.fail(err)
+		return a.fail(err), false
 	}
 	if !strings.EqualFold(login, acc.GitHubUser) {
-		return a.fail(fmt.Errorf("gh's token for %s belongs to %s", acc.GitHubUser, login))
+		return a.fail(fmt.Errorf("gh's token for %s on %s belongs to %s", acc.GitHubUser, apiHost, login)), false
 	}
 
 	var kinds []github.Kind
@@ -80,35 +110,39 @@ func (a *app) cmdUpload(args []string) int {
 		kinds = append(kinds, kindsOf(k)...)
 	}
 	if missing := github.MissingScopes(granted, kinds...); len(missing) > 0 {
-		return a.fail(fmt.Errorf("gh's token for %s can't add SSH keys yet. Give it the %s scope with:\n  %s",
-			acc.GitHubUser, strings.Join(missing, " and "), refreshCommand(acc.GitHubUser, missing)))
+		return a.fail(fmt.Errorf("gh's token for %s on %s can't add SSH keys yet. Give it the %s scope with:\n  %s",
+			acc.GitHubUser, apiHost, strings.Join(missing, " and "), refreshCommand(apiHost, acc.GitHubUser, missing))), false
 	}
 
 	title := keyTitle(acc)
+	where := acc.GitHubUser
+	if apiHost != github.DotCom {
+		where += " on " + apiHost
+	}
 	existing := map[github.Kind][]string{}
 	for _, k := range exported {
 		pub, err := keys.ReadPublic(k.key)
 		if err != nil {
-			return a.fail(fmt.Errorf("%s: %w", a.env.Shorten(keys.PublicPath(k.key)), err))
+			return a.fail(fmt.Errorf("%s: %w", a.env.Shorten(keys.PublicPath(k.key)), err)), false
 		}
+		short := a.env.Shorten(keys.PublicPath(k.key))
 		for _, kind := range kindsOf(k) {
 			if _, ok := existing[kind]; !ok {
 				if existing[kind], err = client.Keys(kind); err != nil {
-					return a.fail(err)
+					return a.fail(err), false
 				}
 			}
-			short := a.env.Shorten(keys.PublicPath(k.key))
 			if slices.Contains(existing[kind], pub) {
-				a.successf("%s is already one of %s's %s keys", short, acc.GitHubUser, kind)
+				a.successf("%s is already one of %s's %s keys", short, where, kind)
 				continue
 			}
 			if err := client.Add(kind, keys.PublicPath(k.key), title); err != nil {
-				return a.fail(err)
+				return a.fail(err), false
 			}
-			a.successf("Added %s to %s's %s keys on GitHub", short, acc.GitHubUser, kind)
+			a.successf("Added %s to %s's %s keys", short, where, kind)
 		}
 	}
-	return 0
+	return 0, false
 }
 
 func kindsOf(k exportedKey) []github.Kind {
@@ -122,11 +156,12 @@ func kindsOf(k exportedKey) []github.Kind {
 	return kinds
 }
 
-// refreshCommand is how to add scopes to user's gh token. gh only refreshes
-// its active account, so for another account it switches there and back.
-func refreshCommand(user string, scopes []string) string {
-	refresh := "gh auth refresh -h github.com -s " + strings.Join(scopes, ",")
-	active, err := github.ActiveUser()
+// refreshCommand is how to add scopes to user's gh token on apiHost. gh
+// only refreshes its active account, so for another account it switches
+// there and back.
+func refreshCommand(apiHost, user string, scopes []string) string {
+	refresh := "gh auth refresh -h " + apiHost + " -s " + strings.Join(scopes, ",")
+	active, err := github.ActiveUser(apiHost)
 	if err == nil && strings.EqualFold(active, user) {
 		return refresh
 	}
@@ -134,5 +169,5 @@ func refreshCommand(user string, scopes []string) string {
 	if err == nil && active != "" {
 		back = active
 	}
-	return fmt.Sprintf("gh auth switch -h github.com -u %s && %s && gh auth switch -h github.com -u %s", user, refresh, back)
+	return fmt.Sprintf("gh auth switch -h %s -u %s && %s && gh auth switch -h %s -u %s", apiHost, user, refresh, apiHost, back)
 }

@@ -1,6 +1,8 @@
 // Package github adds SSH keys to GitHub through the gh CLI. It uses the
 // token gh keeps for a specific user, so a key reaches the right account
-// without switching gh's active account.
+// without switching gh's active account. It works with github.com (where
+// GitHub Enterprise Cloud lives too), GHE.com data-residency hosts, and
+// GitHub Enterprise Server hosts gh is signed in to.
 package github
 
 import (
@@ -14,8 +16,40 @@ import (
 	"strings"
 )
 
-// Host is the only host doppel uploads to.
-const Host = "github.com"
+// DotCom is GitHub's own host, which GitHub Enterprise Cloud shares.
+const DotCom = "github.com"
+
+// KnownHost recognizes GitHub hosts by name: github.com, its port-443 SSH
+// endpoint ssh.github.com, and GHE.com subdomains (GitHub Enterprise Cloud
+// with data residency). apiHost is the host gh talks to for it.
+func KnownHost(host string) (apiHost string, ok bool) {
+	h := strings.ToLower(host)
+	switch {
+	case h == DotCom || h == "ssh."+DotCom:
+		return DotCom, true
+	case strings.HasSuffix(h, ".ghe.com"):
+		return h, true
+	}
+	return "", false
+}
+
+// APIHost tells whether host is GitHub, and which host gh talks to for it.
+// Beyond the names KnownHost recognizes, a host gh is signed in to counts:
+// gh only signs in to GitHub, so that's how GitHub Enterprise Server is
+// found. The check is local; nothing connects.
+func APIHost(host string) (string, bool) {
+	if api, ok := KnownHost(host); ok {
+		return api, true
+	}
+	if !Available() {
+		return "", false
+	}
+	out, err := run("", "", "auth", "token", "--hostname", host)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	return strings.ToLower(host), true
+}
 
 // Kind is how GitHub files a key.
 type Kind string
@@ -41,32 +75,32 @@ func Available() bool {
 	return err == nil
 }
 
-// NotSignedInError means gh has no token for a user.
-type NotSignedInError struct{ User string }
+// NotSignedInError means gh has no token for a user on a host.
+type NotSignedInError struct{ Host, User string }
 
 func (e *NotSignedInError) Error() string {
-	return fmt.Sprintf("gh isn't signed in to %s as %s", Host, e.User)
+	return fmt.Sprintf("gh isn't signed in to %s as %s", e.Host, e.User)
 }
 
-// Client talks to GitHub as one user.
+// Client talks to one GitHub host as one user.
 type Client struct {
-	User  string
-	token string
+	Host, User string
+	token      string
 }
 
-// ForUser returns a client using the token gh stores for user.
-func ForUser(user string) (*Client, error) {
-	out, err := run("", "auth", "token", "--hostname", Host, "--user", user)
+// ForUser returns a client using the token gh stores for user on apiHost.
+func ForUser(apiHost, user string) (*Client, error) {
+	out, err := run(apiHost, "", "auth", "token", "--hostname", apiHost, "--user", user)
 	token := strings.TrimSpace(out)
 	if err != nil || token == "" {
-		return nil, &NotSignedInError{User: user}
+		return nil, &NotSignedInError{Host: apiHost, User: user}
 	}
-	return &Client{User: user, token: token}, nil
+	return &Client{Host: apiHost, User: user, token: token}, nil
 }
 
 // Info returns the user the token belongs to and the scopes it grants.
 func (c *Client) Info() (login string, granted []string, err error) {
-	out, err := run(c.token, "api", "-i", "user")
+	out, err := run(c.Host, c.token, "api", "-i", "user")
 	if err != nil {
 		return "", nil, err
 	}
@@ -109,7 +143,7 @@ func (c *Client) Keys(k Kind) ([]string, error) {
 	if k == Signing {
 		endpoint = "user/ssh_signing_keys"
 	}
-	out, err := run(c.token, "api", "--paginate", endpoint, "--jq", ".[].key")
+	out, err := run(c.Host, c.token, "api", "--paginate", endpoint, "--jq", ".[].key")
 	if err != nil {
 		return nil, err
 	}
@@ -124,28 +158,37 @@ func (c *Client) Keys(k Kind) ([]string, error) {
 
 // Add adds the public key at pubPath to the user's keys of kind k.
 func (c *Client) Add(k Kind, pubPath, title string) error {
-	_, err := run(c.token, "ssh-key", "add", pubPath, "--title", title, "--type", string(k))
+	_, err := run(c.Host, c.token, "ssh-key", "add", pubPath, "--title", title, "--type", string(k))
 	return err
 }
 
-// ActiveUser returns the account gh uses by default on GitHub.
-func ActiveUser() (string, error) {
-	out, err := run("", "api", "user", "--jq", ".login")
+// ActiveUser returns the account gh uses by default on apiHost.
+func ActiveUser(apiHost string) (string, error) {
+	out, err := run(apiHost, "", "api", "user", "--jq", ".login")
 	return strings.TrimSpace(out), err
 }
 
-// run runs gh as token's user, or with gh's own active account when token
-// is "". Tokens from the environment are dropped, so they can't override
-// the account doppel asked for.
-func run(token string, args ...string) (string, error) {
+// run runs gh against apiHost as token's user, or with gh's own active
+// account when token is "". Host and token settings from the environment
+// are dropped, so they can't send keys anywhere doppel didn't ask for.
+func run(apiHost, token string, args ...string) (string, error) {
 	cmd := exec.Command("gh", args...) //nolint:gosec // fixed binary; arguments built by doppel
 	for _, v := range os.Environ() {
-		if !strings.HasPrefix(v, "GH_TOKEN=") && !strings.HasPrefix(v, "GITHUB_TOKEN=") {
-			cmd.Env = append(cmd.Env, v)
+		name, _, _ := strings.Cut(v, "=")
+		switch name {
+		case "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST":
+			continue
 		}
+		cmd.Env = append(cmd.Env, v)
+	}
+	if apiHost != "" {
+		cmd.Env = append(cmd.Env, "GH_HOST="+apiHost)
 	}
 	if token != "" {
 		cmd.Env = append(cmd.Env, "GH_TOKEN="+token)
+		if apiHost != DotCom {
+			cmd.Env = append(cmd.Env, "GH_ENTERPRISE_TOKEN="+token)
+		}
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

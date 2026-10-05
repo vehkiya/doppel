@@ -23,3 +23,21 @@ func TestMissingScopes(t *testing.T) {
 		}
 	}
 }
+
+func TestKnownHost(t *testing.T) {
+	cases := map[string]string{
+		"github.com":      "github.com",
+		"GitHub.com":      "github.com",
+		"ssh.github.com":  "github.com", // the port-443 SSH endpoint
+		"acme.ghe.com":    "acme.ghe.com",
+		"gitlab.com":      "",
+		"git.acme.com":    "", // could be GitHub Enterprise Server; only gh can tell
+		"gist.github.com": "",
+	}
+	for host, want := range cases {
+		got, ok := KnownHost(host)
+		if got != want || ok != (want != "") {
+			t.Errorf("KnownHost(%q) = %q, %v; want %q", host, got, ok, want)
+		}
+	}
+}

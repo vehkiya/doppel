@@ -102,7 +102,7 @@ func (a *app) accountWizard(list []*accounts.Account, acc *accounts.Account, isN
 	if len(acc.Hosts) == 0 {
 		acc.Hosts = []string{accounts.DefaultHost}
 	}
-	if slices.ContainsFunc(acc.Hosts, func(h string) bool { return strings.EqualFold(h, "github.com") }) {
+	if slices.ContainsFunc(acc.Hosts, isGitHub) {
 		if err := a.runForm(huh.NewForm(huh.NewGroup(
 			huh.NewInput().Title("GitHub username").
 				Description("Optional. doppel checks the keys log in as this user").
