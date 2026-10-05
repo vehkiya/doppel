@@ -79,8 +79,7 @@ func (a *app) cmdExport(args []string) int {
 		a.notef("Two keys, so nothing was copied. Copy one with --auth or --signing.\n")
 	}
 
-	host, _ := os.Hostname()
-	title := fmt.Sprintf("doppel: %s (%s)", acc.ID, strings.TrimSuffix(host, ".local"))
+	title := keyTitle(acc)
 	for _, h := range acc.Hosts {
 		a.printf("%s\n", ui.Accent.Render(h))
 		for _, k := range exported {
@@ -91,6 +90,12 @@ func (a *app) cmdExport(args []string) int {
 		a.printf("\n")
 	}
 	return 0
+}
+
+// keyTitle names a key on a host's settings page: the account and this machine.
+func keyTitle(acc *accounts.Account) string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("doppel: %s (%s)", acc.ID, strings.TrimSuffix(host, ".local"))
 }
 
 // keysToExport picks the keys export shows. A key used for both logging in

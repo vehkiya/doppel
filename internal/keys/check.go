@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -130,4 +131,47 @@ func lastLine(s string, fallback error) string {
 	}
 	lines := strings.Split(s, "\n")
 	return lines[len(lines)-1]
+}
+
+var opensshVersion = regexp.MustCompile(`OpenSSH_(\d+)\.(\d+)`)
+
+// OpenSSHVersion returns the installed OpenSSH's major and minor version.
+func OpenSSHVersion() (major, minor int, ok bool) {
+	out, _ := exec.Command("ssh", "-V").CombinedOutput() // ssh -V prints to stderr
+	m := opensshVersion.FindStringSubmatch(string(out))
+	if m == nil {
+		return 0, 0, false
+	}
+	_, _ = fmt.Sscan(m[1], &major)
+	_, _ = fmt.Sscan(m[2], &minor)
+	return major, minor, true
+}
+
+// HostIdentityFiles lists the keys an ssh config file adds for host on top
+// of the ones every host gets. If an account's own key were rejected, ssh
+// would fall back to these and could log in as someone else. ssh -G reads
+// the config without connecting, so Include, Match and wildcards are
+// handled as ssh handles them.
+func HostIdentityFiles(sshConfig, host string) []string {
+	files := func(h string) []string {
+		out, err := exec.Command("ssh", "-G", "-F", sshConfig, h).Output() //nolint:gosec // fixed binary; arguments built by doppel
+		if err != nil {
+			return nil
+		}
+		var list []string
+		for _, line := range strings.Split(string(out), "\n") {
+			if f, ok := strings.CutPrefix(line, "identityfile "); ok {
+				list = append(list, strings.TrimSpace(f))
+			}
+		}
+		return list
+	}
+	everyone := files("doppel-no-such-host.invalid")
+	var extra []string
+	for _, f := range files(host) {
+		if !slices.Contains(everyone, f) {
+			extra = append(extra, f)
+		}
+	}
+	return extra
 }

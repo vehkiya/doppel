@@ -1,6 +1,8 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/git"
@@ -157,4 +159,52 @@ func isIndexPathLine(env *paths.Env, line string) bool {
 		return false
 	}
 	return env.SamePath(unquoteValue(strings.TrimSpace(value)), env.IndexPath())
+}
+
+// Overrides lists the settings doppel manages that the global Git config
+// sets after doppel's include, where they override every account. found is
+// false when the file doesn't include doppel's index at all.
+func Overrides(env *paths.Env, managed []string) (path string, found bool, overriding []string, err error) {
+	path = env.GlobalConfigPath()
+	data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // the user's global Git config
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, false, nil, nil
+		}
+		return path, false, nil, err
+	}
+	lines := strings.Split(string(data), "\n")
+	last := -1
+	for i, line := range lines {
+		if isIndexPathLine(env, line) {
+			last = i
+		}
+	}
+	if last < 0 {
+		return path, false, nil, nil
+	}
+	// Read what follows the include with Git. Lines left over from the
+	// [include] section get a placeholder section so Git can parse them.
+	tail, err := os.CreateTemp("", "doppel-tail-*.gitconfig")
+	if err != nil {
+		return path, true, nil, err
+	}
+	defer func() { _ = os.Remove(tail.Name()) }()
+	_, err = tail.WriteString("[doppel-tail]\n" + strings.Join(lines[last+1:], "\n"))
+	if cerr := tail.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return path, true, nil, err
+	}
+	values, err := git.ReadConfigFile(tail.Name())
+	if err != nil {
+		return path, true, nil, err
+	}
+	for _, key := range managed {
+		if _, ok := values[strings.ToLower(key)]; ok {
+			overriding = append(overriding, key)
+		}
+	}
+	return path, true, overriding, nil
 }

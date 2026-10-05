@@ -5,6 +5,7 @@ package testenv
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -160,4 +161,25 @@ cat >&2 <<'REPLY'
 `+reply+`
 REPLY
 exit 1`)
+}
+
+// OnlyCommands replaces PATH with a folder holding just the named commands,
+// plus any fakes, to test what happens when a tool isn't installed.
+func (s *Sandbox) OnlyCommands(names ...string) {
+	s.T.Helper()
+	bin := s.Mkdir("only-bin")
+	for _, name := range names {
+		real, err := exec.LookPath(name)
+		if err != nil {
+			s.T.Fatalf("%s isn't installed: %v", name, err)
+		}
+		if err := os.Symlink(real, filepath.Join(bin, name)); err != nil {
+			s.T.Fatal(err)
+		}
+	}
+	path := bin
+	if fake := s.Path("fake-bin"); s.Exists("fake-bin") {
+		path = fake + string(os.PathListSeparator) + bin
+	}
+	s.T.Setenv("PATH", path)
 }
