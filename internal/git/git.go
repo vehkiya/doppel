@@ -160,3 +160,12 @@ func Check() error {
 	}
 	return nil
 }
+
+// Version returns the installed Git's version, such as "2.56.0".
+func Version() string {
+	out, err := RunAlone("version")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), "git version"))
+}

@@ -9,9 +9,9 @@ import (
 	"github.com/vehkiya/doppel/internal/tui"
 )
 
-// answers joins scripted wizard answers, one per prompt. An empty answer
+// script joins scripted wizard answers, one per prompt. An empty answer
 // takes the prompt's default.
-func answers(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
+func script(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
 
 func loadAccount(t *testing.T, s *sandbox, id string) *accounts.Account {
 	t.Helper()
@@ -29,7 +29,7 @@ func loadAccount(t *testing.T, s *sandbox, id string) *accounts.Account {
 func TestAddWizard(t *testing.T) {
 	s := newSandbox(t)
 	s.tty = true
-	s.stdin = answers(
+	s.stdin = script(
 		"work", "Jane Doe", "jane@acme.com", // identity
 		"",                // hosts: github.com
 		"jane-acme",       // GitHub username
@@ -69,7 +69,7 @@ func TestAddWizardStartsFromTheGlobalIdentity(t *testing.T) {
 	sshCommand = ssh -i ~/.ssh/id_old -o IdentitiesOnly=yes
 `)
 	s.tty = true
-	s.stdin = answers(
+	s.stdin = script(
 		"",                 // start from ~/.gitconfig: yes
 		"personal", "", "", // ID; name and email come prefilled
 		"", "", "", // hosts, GitHub username, folders
@@ -97,7 +97,7 @@ func TestEditWizard(t *testing.T) {
 	s.addAccount("personal", "jane@personal.dev")
 	s.addAccount("work", "jane@acme.com", "--folder", "~/projects/work", "--auth-key", "~/.ssh/id_work")
 	s.tty = true
-	s.stdin = answers(
+	s.stdin = script(
 		"", "jane@acme.io", // name stays, new email
 		"", "", "", // hosts, GitHub username, folders stay
 		"", // not the default
@@ -117,7 +117,7 @@ func TestEditWizard(t *testing.T) {
 func TestWizardCancel(t *testing.T) {
 	s := newSandbox(t)
 	s.tty = true
-	s.stdin = answers("work", "Jane Doe", "jane@acme.com", "", "", "", "", "", "0", "n")
+	s.stdin = script("work", "Jane Doe", "jane@acme.com", "", "", "", "", "", "0", "n")
 	if stderr := s.mustFail(1, "add"); !strings.Contains(stderr, "cancelled") {
 		t.Errorf("stderr: %s", stderr)
 	}
@@ -146,7 +146,7 @@ func TestRmAsksForANewDefault(t *testing.T) {
 		s.addAccount(id, "jane@"+id+".dev")
 	}
 	s.tty = true
-	s.stdin = answers("2") // of side and work, pick work
+	s.stdin = script("2") // of side and work, pick work
 	s.mustRun("rm", "personal", "--yes")
 	if acc := loadAccount(t, s, "work"); !acc.Default {
 		t.Error("work isn't the default after picking it")
@@ -164,13 +164,13 @@ func TestBrowserActions(t *testing.T) {
 		t.Errorf("default: status %q", got)
 	}
 
-	s.stdin = answers("~/projects/work", "") // the folder, then Enter after the warning that it doesn't exist yet
+	s.stdin = script("~/projects/work", "") // the folder, then Enter after the warning that it doesn't exist yet
 	a = s.newApp(s.Home)
 	if got := a.runAction(tui.Action{Kind: tui.Bind, ID: "work"}); got != "✓ Bound to work: ~/projects/work/" {
 		t.Errorf("bind: status %q", got)
 	}
 
-	s.stdin = answers("1") // the new default after deleting work: personal
+	s.stdin = script("1") // the new default after deleting work: personal
 	a = s.newApp(s.Home)
 	if got := a.runAction(tui.Action{Kind: tui.Delete, ID: "work"}); got != "✓ Deleted account work" {
 		t.Errorf("delete: status %q", got)

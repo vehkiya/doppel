@@ -89,7 +89,7 @@ func (a *app) confirm(question string, assumeYes bool) error {
 // runForm runs a Huh form in doppel's theme. In accessible mode, used by
 // tests, it reads answers line by line from stdin instead of drawing the form.
 func (a *app) runForm(form *huh.Form) error {
-	form = form.WithTheme(ui.HuhTheme()).WithShowHelp(true)
+	form = form.WithTheme(ui.HuhTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 	if a.accessible {
 		form = form.WithAccessible(true).WithInput(lineReader{a.stdin}).WithOutput(a.stdout)
 	}
@@ -189,6 +189,8 @@ func (a *app) run(args []string) int {
 		"default":   a.cmdDefault,
 		"whoami":    a.cmdWhoami,
 		"export":    a.cmdExport,
+		"upload":    a.cmdUpload,
+		"doctor":    a.cmdDoctor,
 		"test":      a.cmdTest,
 		"uninstall": a.cmdUninstall,
 	}
@@ -223,6 +225,8 @@ func (a *app) printUsage() {
   doppel whoami [path] [--offline]       Show which account applies, and why
   doppel test [<id>]                     Log in to each host and sign a test message
   doppel export <id> [--auth|--signing]  Print and copy a public key, with where to add it
+  doppel upload <id> [--auth|--signing]  Add the account's keys to its GitHub user (with gh)
+  doppel doctor [--fix]                  Check every account for problems
   doppel uninstall                       Remove doppel's include from your Git config
   doppel version                         Show the version
 

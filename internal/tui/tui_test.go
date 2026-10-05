@@ -48,7 +48,7 @@ func press(m tea.Model, keys ...string) (tea.Model, tea.Cmd) {
 
 func TestKeysPickActions(t *testing.T) {
 	cases := map[string]ActionKind{
-		"enter": Edit, "e": Edit, "a": Add, "b": Bind, "*": SetDefault, "x": Export, "t": Test,
+		"enter": Edit, "e": Edit, "a": Add, "b": Bind, "*": SetDefault, "x": Export, "u": Upload, "t": Test,
 	}
 	for k, want := range cases {
 		m, cmd := press(newModel(t, testAccounts(), 120, 30), k)

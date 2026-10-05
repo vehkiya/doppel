@@ -106,12 +106,23 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 ### R5. Getting keys onto hosts
 
-- **R5.1 `upload` (GitHub):** `gh ssh-key add --type authentication|signing --title "doppel: <account> (<hostname>)"`.
+- **R5.1 `upload` (GitHub):** `gh ssh-key add --type authentication|signing --title "doppel: <account> (<hostname>)"`, on every GitHub host the account uses.
+  - **Which hosts are GitHub:**
+    - `github.com`, which GitHub Enterprise Cloud (including Enterprise Managed Users) shares
+    - its port-443 SSH endpoint `ssh.github.com`
+    - `*.ghe.com` (GitHub Enterprise Cloud with data residency)
+    - any other host `gh` is signed in to. `gh` only signs in to GitHub, so this is how GitHub Enterprise Server is found. The check is a local token lookup; nothing connects.
+  - **Pointing gh at a host:** `GH_HOST` targets each host.
+  - **Unrecognized hosts:** if no host is recognized, doppel suggests `gh auth login -h <host>` for an Enterprise Server, or `export` for anything else.
   - Runs with the token from `gh auth token --user <username>`, so the key goes to the account's GitHub user without switching gh's active account.
 - **R5.2** Before uploading, doppel checks:
   - **Already uploaded?** It compares against `gh api user/keys` and `user/ssh_signing_keys`, and reports "already on GitHub" instead of failing.
-  - **Token scopes:** the token must have `admin:public_key` and/or `admin:ssh_signing_key`. If one is missing, doppel prints the exact `gh auth refresh -h github.com -s <scope>` command.
+  - **Token scopes:** the token must have `admin:public_key` (or `write:public_key`) for auth keys, and `admin:ssh_signing_key` (or `write:ssh_signing_key`) for signing keys. If one is missing, doppel prints the exact command to add it. gh only refreshes its active account, so for another account the command switches to it, refreshes, and switches back.
+  - **The right user:** doppel checks the token really belongs to the account's GitHub user. `GH_TOKEN`, `GITHUB_TOKEN`, their `_ENTERPRISE_` forms and `GH_HOST` in the environment are ignored, so they can't send keys to a different account or host.
   - **Signed in:** if gh isn't installed or isn't signed in as that user, doppel falls back to `export`.
+- **R5.2a** `upload` needs a GitHub host and a GitHub user; otherwise it says what to do. A key that both logs in and signs is added once as each kind.
+  - **One user everywhere:** the account's GitHub user applies to all its GitHub hosts. Separate identities, such as a personal github.com user and an Enterprise Server user, belong in separate accounts.
+  - **Same detection elsewhere:** `export`'s GitHub steps (with that host's settings page), `test`'s GitHub-user check, the wizard's GitHub-username question and `doctor`'s note all use it.
 - **R5.3 `export` (any host):**
   - Prints the public key and copies it to the clipboard. When two different keys are shown, nothing is copied; `--auth` or `--signing` picks one.
   - Gives step-by-step instructions, including which key type to choose, for GitHub, GitLab (usage type *Authentication*, *Signing*, or *Authentication & Signing*), Gitea/Forgejo, and other hosts.
@@ -131,15 +142,32 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 ### R7. `doctor`
 
-Checks every account and prints how to fix each problem it finds:
-- Key files exist, have a passphrase, and whether they're loaded in the agent (the agent check is information only).
-- Every signing key has a matching entry in `allowed_signers`.
-- Every bound folder exists.
-- doppel's include is still the last section of the global Git config, and nothing after it sets a setting doppel manages.
-- `GIT_SSH_COMMAND` and `GIT_SSH` aren't set in the environment, because they override every account.
-- `~/.ssh/config` doesn't set `IdentityFile` for one of an account's hosts. If the account's key were rejected, ssh would fall back to that key and quietly log in as a different account.
-- Bound folders don't contain repos with HTTPS remotes, which these settings don't cover (reported, not changed).
-- Git is 2.34 or newer, and OpenSSH supports `ssh-keygen -Y`.
+Checks everything that could make Git use the wrong account, and prints a one-line fix under each finding.
+- A **problem** means Git may use the wrong account or fail, and makes `doctor` exit with status 1. A **warning** works but is worth knowing.
+- Without `--fix`, doctor writes nothing.
+
+**Git and SSH**
+- Git is 2.34 or newer (checked before any command runs), and OpenSSH is 8.2 or newer, as Git needs to verify SSH signatures. *(problem)*
+- `GIT_SSH_COMMAND` and `GIT_SSH` aren't set, because they override every account. *(problem)*
+
+**Git config**
+- The global Git config includes doppel's index. *(problem)*
+- Nothing after the include sets an identity setting (`user.name`, `user.email`, `user.signingkey`, `gpg.format`, `commit.gpgsign`, `tag.gpgsign`, `core.sshCommand`), which would override every account. *(problem)*
+- doppel's files say what the accounts say: account files, the index, the `allowed_signers` block and the include. A hand edit to `core.sshCommand` in an account file shows up here. *(warning)*
+- `--fix` rewrites exactly these files, through the same plan as any save, so they match the accounts again. It also restores a missing include. It doesn't touch anything else.
+
+**Each account**
+- **Keys:**
+  - its auth key exists *(problem)*
+  - its keys have a passphrase *(warning)*
+  - an agent-held key is unlocked in the agent right now *(warning)*
+  - the signing key's public key can be read *(problem)*
+- **Shared keys:** two accounts on the same host don't use the same auth key, or both rely on ssh's own keys. Either way, one would log in as the other. *(problem)*
+- **Folders:** every bound folder exists. *(warning)*
+- **SSH config:** `~/.ssh/config` doesn't offer another `IdentityFile` for one of the account's hosts. If the account's key were rejected, ssh would fall back to that key and could log in as someone else. *(warning)*
+  - doppel finds these by comparing `ssh -G -F ~/.ssh/config <host>` with a host that doesn't exist, so `Include`, `Match` and wildcards count as ssh counts them, and nothing connects.
+- **HTTPS remotes:** no repos in the account's folders fetch over HTTPS, which these keys don't cover. Reported only, never changed. *(warning)*
+  - To stay quick on big trees, doppel looks three levels deep and skips hidden, `node_modules` and `vendor` folders.
 
 ### R8. Safety
 
@@ -162,7 +190,7 @@ Checks every account and prints how to fix each problem it finds:
 - **R9.1** `doppel` with no arguments opens an account browser in the style of sshx when both stdin and stdout are terminals. Otherwise it prints `ls`.
   - **Left pane:** account IDs and emails, with the default marked ★; `/` filters.
   - **Right pane:** name, email, hosts, GitHub user, folders, keys with status badges (passphrase, in agent), signing, and the account file. On terminals narrower than 100 columns, Tab switches between the list and the details.
-  - **Keys:** edit (`enter`/`e`), add (`a`), delete (`d`, then `y` to confirm), bind a folder (`b`), make default (`*`), export (`x`), test (`t`), quit (`q`/`esc`). Upload (`u`) comes with milestone 4.
+  - **Keys:** edit (`enter`/`e`), add (`a`), delete (`d`, then `y` to confirm), bind a folder (`b`), make default (`*`), export (`x`), upload to GitHub (`u`), test (`t`), quit (`q`/`esc`).
   - Each action leaves the browser, runs as its command would, and returns to the same account. A one-line result shows in the browser; output to read (`export`, `test`) and warnings or errors wait for Enter first.
 - **R9.1a** `doppel add` and `doppel edit <id>` without flags, in a terminal, walk through a wizard instead:
   - identity, hosts and GitHub user
@@ -170,6 +198,11 @@ Checks every account and prints how to fix each problem it finds:
   - auth key: keep, generate, a key found in `~/.ssh` (including `.pub` files for agent-held keys), another file, or none
   - signing, and what to sign
   - a review before saving
+
+  The wizard is a single form:
+  - Shift+Tab goes back to any earlier page, keeping what was typed.
+  - Esc or Ctrl+C cancels from any page without saving; the same keys cancel every other prompt too.
+  - The review page reflects the answers as they stand, including changes made after going back.
 
   With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
 - **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers.
@@ -190,7 +223,7 @@ doppel unbind <folder>...                Remove folder bindings
 doppel default [<id> | --none]           Show or set the default account
 doppel whoami [path] [--offline]         Show which account applies here, and why
 doppel test [<id>]                       Log in to each host and sign a test message
-doppel doctor                            Check every account for problems
+doppel doctor [--fix]                    Check every account for problems; --fix brings doppel's files up to date
 doppel export <id> [--auth|--signing]    Print and copy a public key, with host instructions
 doppel upload <id> [--auth|--signing]    Upload keys to GitHub with gh
 doppel uninstall                         Remove doppel's changes to your Git and SSH files
@@ -311,9 +344,9 @@ Every account file sets every setting doppel manages, including a "reset" value 
     keys/      reading, generating and checking SSH keys; the login and signing checks
     ui/        palette, styles and diff rendering
     version/   build version
+    github/    adding keys to GitHub through gh
     testenv/   a sandboxed home directory and Git environment for tests
   ```
-  A later milestone adds `github/` (uploads through gh).
 - The palette, badges and Huh theme are copied from sshx. The quality checks follow sshx's `AGENTS.md`: `gofmt -s`, `go test -race`, `golangci-lint`, a tidy `go.mod`. A doppel `AGENTS.md` adds the rules from §6.2 to §6.4.
 
 ### 6.7 Testing

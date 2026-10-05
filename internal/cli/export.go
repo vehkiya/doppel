@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/github"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/ui"
 )
@@ -79,8 +80,7 @@ func (a *app) cmdExport(args []string) int {
 		a.notef("Two keys, so nothing was copied. Copy one with --auth or --signing.\n")
 	}
 
-	host, _ := os.Hostname()
-	title := fmt.Sprintf("doppel: %s (%s)", acc.ID, strings.TrimSuffix(host, ".local"))
+	title := keyTitle(acc)
 	for _, h := range acc.Hosts {
 		a.printf("%s\n", ui.Accent.Render(h))
 		for _, k := range exported {
@@ -91,6 +91,12 @@ func (a *app) cmdExport(args []string) int {
 		a.printf("\n")
 	}
 	return 0
+}
+
+// keyTitle names a key on a host's settings page: the account and this machine.
+func keyTitle(acc *accounts.Account) string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("doppel: %s (%s)", acc.ID, strings.TrimSuffix(host, ".local"))
 }
 
 // keysToExport picks the keys export shows. A key used for both logging in
@@ -118,9 +124,8 @@ func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([
 
 // hostSteps says where to add a key on a host, and which key type to pick.
 func hostSteps(host string, k exportedKey, title string) []string {
-	switch {
-	case strings.EqualFold(host, "github.com"):
-		steps := []string{"Open https://github.com/settings/ssh/new", "Title: " + title}
+	if api, ok := github.APIHost(host); ok {
+		steps := []string{"Open https://" + api + "/settings/ssh/new", "Title: " + title}
 		switch {
 		case k.auth && k.signing:
 			steps = append(steps, "Key type: Authentication Key. Then add it a second time with Key type: Signing Key.")
@@ -130,7 +135,9 @@ func hostSteps(host string, k exportedKey, title string) []string {
 			steps = append(steps, "Key type: Signing Key")
 		}
 		return append(steps, "Paste the key and click Add SSH key.")
+	}
 
+	switch {
 	case strings.Contains(strings.ToLower(host), "gitlab"):
 		usage := "Signing"
 		switch {

@@ -29,6 +29,7 @@ const (
 	Bind       ActionKind = "bind"
 	SetDefault ActionKind = "default"
 	Export     ActionKind = "export"
+	Upload     ActionKind = "upload"
 	Test       ActionKind = "test"
 )
 
@@ -77,7 +78,7 @@ func (i item) Description() string { return i.acc.Email }
 func (i item) FilterValue() string { return i.acc.ID + " " + i.acc.Email }
 
 type keyMap struct {
-	edit, add, del, bind, def, export, test, details key.Binding
+	edit, add, del, bind, def, export, upload, test, details key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -88,6 +89,7 @@ func newKeyMap() keyMap {
 		bind:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "bind folder")),
 		def:     key.NewBinding(key.WithKeys("*"), key.WithHelp("*", "default")),
 		export:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "export key")),
+		upload:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upload to GitHub")),
 		test:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test")),
 		details: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "details")),
 	}
@@ -133,7 +135,7 @@ func New(opts Options) Model {
 		return []key.Binding{keys.edit, keys.add}
 	}
 	l.AdditionalFullHelpKeys = func() []key.Binding {
-		return []key.Binding{keys.edit, keys.add, keys.del, keys.bind, keys.def, keys.export, keys.test, keys.details}
+		return []key.Binding{keys.edit, keys.add, keys.del, keys.bind, keys.def, keys.export, keys.upload, keys.test, keys.details}
 	}
 	l.KeyMap.Quit.SetKeys("q", "esc")
 	l.KeyMap.Quit.SetHelp("q/esc", "quit")
@@ -201,6 +203,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.pick(SetDefault)
 		case key.Matches(msg, m.keys.export):
 			return m.pick(Export)
+		case key.Matches(msg, m.keys.upload):
+			return m.pick(Upload)
 		case key.Matches(msg, m.keys.test):
 			return m.pick(Test)
 		case key.Matches(msg, m.keys.details):
@@ -344,7 +348,7 @@ func (m Model) details(acc *accounts.Account) string {
 		row("File", m.env.Shorten(m.env.AccountPath(acc.ID)))
 	}
 
-	b.WriteString("\n" + hintStyle.Render("e edit · b bind folder · * make default\nx export key · t test · d delete"))
+	b.WriteString("\n" + hintStyle.Render("e edit · b bind folder · * make default\nx export · u upload · t test · d delete"))
 	return b.String()
 }
 

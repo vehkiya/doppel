@@ -50,6 +50,10 @@ func (a *app) runAction(act tui.Action) string {
 		a.cmdTest([]string{act.ID})
 		a.pause()
 		return ""
+	case tui.Upload:
+		a.cmdUpload([]string{act.ID})
+		a.pause()
+		return ""
 	case tui.Bind:
 		folder, err := a.askFolder(act.ID)
 		if err != nil {

@@ -19,7 +19,7 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan` and `keys` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys` and `github` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
 * Export only what another package needs. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
@@ -50,8 +50,11 @@ Before committing, all of the following must pass cleanly:
 * doppel never overwrites or deletes key files.
 
 ### 2.3a Interactive flows
-* A wizard is a sequence of small Huh forms, with ordinary Go deciding which step comes next. Huh's accessible mode ignores hidden fields, so conditional fields inside one form would break it.
-* Run every form through `app.runForm`, which applies the theme and switches to accessible mode for `$ACCESSIBLE` and for tests.
+* A wizard is a list of `step`s run as **one** Huh form (`wizardForm`), so Shift+Tab goes back to any earlier page and Esc cancels from any page.
+  * **Hidden pages:** a page that only sometimes applies has a `hide` func.
+  * **Answers that change other pages:** choices and the review that depend on earlier answers use `liveSelect` / `liveNote`, which stay current as answers change.
+  * **Accessible mode:** Huh's accessible mode ignores hidden pages and doesn't load live choices, so there `runSteps` asks each visible page in turn. Pages are built by functions, so each one sees the answers before it.
+* Run every form through `app.runForm`. It applies the theme and `formKeyMap` (Esc and Ctrl+C cancel; select filtering is off so Esc means one thing), and switches to accessible mode for `$ACCESSIBLE` and for tests.
 * Validate a prefilled field with `keepIfEmpty`. In accessible mode an empty answer means "keep the value", and Huh validates the typed text before falling back to it.
 * Commands only ask when they have no flags and a terminal (`onlyWriteFlags`). Scripts must never get a question.
 * The browser only picks an action. `cli` carries it out with the same code as the matching command, so the browser and the command line can't drift apart.
@@ -68,6 +71,9 @@ Keep styling consistent with sshx's palette (`internal/ui/palette.go`):
 ### 2.5 Testing
 * Tests never touch the real home directory, Git config or ssh-agent. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` and `SSH_*` variable that could leak in a developer's own setup or open a passphrase dialog.
 * Make test keys with `Sandbox.Key` (real `ssh-keygen`, so signatures really verify). Never contact a real host: stand in for `ssh` with `Sandbox.FakeSSH`.
-* Test wizards by setting `s.tty = true` and scripting `s.stdin` with `answers(...)`, one line per prompt (empty for the default). The sandbox runs forms in accessible mode.
+* Never call the real `gh`. Upload tests use the `fakeGH` script, whose state (signed-in users, scopes, keys) lives in files in the sandbox. To test a missing tool, narrow `PATH` with `Sandbox.OnlyCommands`.
+* `doctor` must stay read-only without `--fix`: it stages its checks in a plan and only applies the plan with `--fix`.
+* Test wizards by setting `s.tty = true` and scripting `s.stdin` with `script(...)`, one line per prompt (empty for the default). The sandbox runs forms in accessible mode.
+* Test the full-screen wizard's navigation with `formDriver`, which sends keys to the real form and feeds its commands back as a terminal would.
 * Test the browser through its model (`New`, `Update`, `View`), not a real terminal. Every view must fit 60, 80 and 120 columns.
 * Prefer end-to-end tests that run doppel and then ask real `git` what applies in a repo, over tests of internal functions.

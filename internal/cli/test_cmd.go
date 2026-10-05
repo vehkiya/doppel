@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/github"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/store"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -83,7 +84,7 @@ func (a *app) checkLogin(acc *accounts.Account, host string, batch bool) (bool, 
 	switch {
 	case !res.Accepted:
 		return false, res.Problem
-	case acc.GitHubUser != "" && strings.EqualFold(host, "github.com") && !strings.EqualFold(res.User, acc.GitHubUser):
+	case acc.GitHubUser != "" && isGitHub(host) && !strings.EqualFold(res.User, acc.GitHubUser):
 		return false, fmt.Sprintf("logged in as %s, but the account's GitHub user is %s", res.User, acc.GitHubUser)
 	}
 	return true, "logged in as " + res.User
@@ -106,6 +107,13 @@ func (a *app) needsPassphrase(key string, batch bool) string {
 		return ""
 	}
 	return "the key has a passphrase and isn't loaded in your agent; load it with `ssh-add " + strings.TrimSuffix(key, ".pub") + "`"
+}
+
+// isGitHub reports whether host is GitHub (github.com, GHE.com, or a GitHub
+// Enterprise Server gh is signed in to).
+func isGitHub(host string) bool {
+	_, ok := github.APIHost(host)
+	return ok
 }
 
 func (a *app) checkRow(ok bool, label, detail string) {
