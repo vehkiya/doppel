@@ -209,7 +209,8 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - a review before saving
 
   The wizard is a single form:
-  - Shift+Tab goes back to any earlier page, keeping what was typed.
+  - Shift+Tab goes back to any earlier page, keeping what was typed, even an answer that isn't finished or valid yet. Each page checks its answer when the user moves on, and Save checks every page once more. A page that's hidden by then, such as the GitHub username once no host is GitHub, doesn't count.
+  - The key choices stay the same throughout. One that doesn't fit the other answers, such as signing with an auth key when there isn't one, or generating a key where a file already exists, is refused with the reason. The description says which file Generate creates.
   - Esc or Ctrl+C cancels from any page without saving; the same keys cancel every other prompt too.
   - The review page reflects the answers as they stand, including changes made after going back.
 
