@@ -89,7 +89,7 @@ func (a *app) confirm(question string, assumeYes bool) error {
 // runForm runs a Huh form in doppel's theme. In accessible mode, used by
 // tests, it reads answers line by line from stdin instead of drawing the form.
 func (a *app) runForm(form *huh.Form) error {
-	form = form.WithTheme(ui.HuhTheme()).WithShowHelp(true)
+	form = form.WithTheme(ui.HuhTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 	if a.accessible {
 		form = form.WithAccessible(true).WithInput(lineReader{a.stdin}).WithOutput(a.stdout)
 	}

@@ -199,6 +199,11 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - signing, and what to sign
   - a review before saving
 
+  The wizard is a single form:
+  - Shift+Tab goes back to any earlier page, keeping what was typed.
+  - Esc or Ctrl+C cancels from any page without saving; the same keys cancel every other prompt too.
+  - The review page reflects the answers as they stand, including changes made after going back.
+
   With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
 - **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers.
 - **R9.2** Every action is also a subcommand, with flags for non-interactive use, so configsh or scripts can set up accounts.
