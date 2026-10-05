@@ -21,7 +21,7 @@ func (a *app) cmdLs(args []string) int {
 		return a.fail(err)
 	}
 	if len(list) == 0 {
-		a.printf("No accounts yet. Add one with:\n  doppel add <id> --name \"Your Name\" --email you@example.com\n")
+		a.printf("No accounts yet. Add one with `doppel add`, which asks for each setting, or for scripts:\n  doppel add <id> --name \"Your Name\" --email you@example.com\n")
 		return 0
 	}
 
