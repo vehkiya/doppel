@@ -29,13 +29,13 @@ func TestRenderIndex(t *testing.T) {
 [includeIf "gitdir:~/projects/work/"]
 	path = ~/.config/doppel/accounts/work.gitconfig
 `
-	if got := string(RenderIndex(env, list)); got != want {
+	if got := string(RenderIndex(env, list, "")); got != want {
 		t.Errorf("renderIndex:\n%s\nwant:\n%s", got, want)
 	}
 
 	env.GOOS = "darwin"
 	list[0].Default = false
-	got := string(RenderIndex(env, list))
+	got := string(RenderIndex(env, list, ""))
 	if !strings.Contains(got, `[includeIf "gitdir/i:~/clients/"]`) {
 		t.Errorf("macOS rules should ignore case:\n%s", got)
 	}

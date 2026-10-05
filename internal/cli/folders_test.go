@@ -53,6 +53,7 @@ func TestMostSpecificFolderWins(t *testing.T) {
 func TestFolderAccountDoesNotInheritDefaultSettings(t *testing.T) {
 	s := newSandbox(t)
 	s.addAccount("personal", "jane@personal.dev")
+	s.Key("personal", "jane@personal.dev", "")
 	// Give the default account a signing key and an SSH key by hand;
 	// doppel reads the signing settings back from the file.
 	s.SetConfig(accountsDir+"personal.gitconfig", accounts.KeySigningKey, "~/.ssh/personal.pub")

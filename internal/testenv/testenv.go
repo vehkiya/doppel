@@ -3,18 +3,20 @@
 package testenv
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 )
 
 // Sandbox is a temporary home directory. HOME and XDG_CONFIG_HOME point at
 // it, and every environment variable that could leak in the developer's own
-// Git setup is cleared for the duration of the test.
+// Git or SSH setup is cleared for the duration of the test.
 type Sandbox struct {
 	T    *testing.T
 	Home string
@@ -34,6 +36,8 @@ func New(t *testing.T) *Sandbox {
 	for _, key := range []string{
 		"GIT_CONFIG_GLOBAL", "GIT_DIR", "GIT_WORK_TREE", "GIT_SSH_COMMAND", "GIT_SSH",
 		"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CEILING_DIRECTORIES",
+		// Keep tests away from the developer's ssh-agent and passphrase dialogs.
+		"SSH_AUTH_SOCK", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
 	} {
 		t.Setenv(key, "") // registers the original value for restoring
 		if err := os.Unsetenv(key); err != nil {
@@ -120,4 +124,40 @@ func (s *Sandbox) SetConfig(rel, key, value string) {
 	if err := git.ConfigFile(s.Path(rel), key, value); err != nil {
 		s.T.Fatal(err)
 	}
+}
+
+// Key generates an Ed25519 key at ~/.ssh/<name> and returns its path.
+func (s *Sandbox) Key(name, email, passphrase string) string {
+	s.T.Helper()
+	path := s.Path(".ssh/" + name)
+	if err := keys.Generate(path, email, &passphrase, nil, io.Discard, io.Discard); err != nil {
+		s.T.Fatal(err)
+	}
+	return path
+}
+
+// FakeCommand puts a shell script named name first on PATH, standing in for
+// a real command such as ssh.
+func (s *Sandbox) FakeCommand(name, script string) {
+	s.T.Helper()
+	bin := s.Mkdir("fake-bin")
+	path := filepath.Join(bin, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0700); err != nil { //nolint:gosec // the fake command has to be executable
+		s.T.Fatal(err)
+	}
+	if !strings.HasPrefix(os.Getenv("PATH"), bin+string(os.PathListSeparator)) {
+		s.T.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+}
+
+// FakeSSH stands in for ssh: it prints reply the way a Git host greets a
+// login (on stderr, then exits 1, since hosts refuse a shell), and records
+// its arguments in ~/ssh-calls.
+func (s *Sandbox) FakeSSH(reply string) {
+	s.T.Helper()
+	s.FakeCommand("ssh", `echo "$@" >> "$HOME/ssh-calls"
+cat >&2 <<'REPLY'
+`+reply+`
+REPLY
+exit 1`)
 }

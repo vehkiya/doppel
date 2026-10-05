@@ -3,9 +3,11 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/testenv"
 )
 
@@ -18,6 +20,7 @@ type sandbox struct {
 	tty    bool   // whether the next command can ask confirmations
 	stdout bytes.Buffer
 	stderr bytes.Buffer
+	copied []string // what the commands put on the clipboard
 }
 
 func newSandbox(t *testing.T) *sandbox {
@@ -42,6 +45,15 @@ func (s *sandbox) runIn(cwd string, args ...string) int {
 		stdout:      &s.stdout,
 		stderr:      &s.stderr,
 		interactive: s.tty,
+		// Generated keys get an empty passphrase, as there's nobody to type one.
+		generate: func(path, comment string) error {
+			empty := ""
+			return keys.Generate(path, comment, &empty, nil, io.Discard, io.Discard)
+		},
+		copy: func(text string) error {
+			s.copied = append(s.copied, text)
+			return nil
+		},
 	}
 	return a.run(args)
 }

@@ -24,7 +24,7 @@ func (a *app) cmdLs(args []string) int {
 		return 0
 	}
 
-	rows := [][]string{{"", "ACCOUNT", "EMAIL", "FOLDERS"}}
+	rows := [][]string{{"", "ACCOUNT", "EMAIL", "KEYS", "FOLDERS"}}
 	for _, acc := range list {
 		marker := ""
 		if acc.Default {
@@ -34,7 +34,7 @@ func (a *app) cmdLs(args []string) int {
 		if len(acc.Folders) > 0 {
 			folders = strings.Join(acc.Folders, ", ")
 		}
-		rows = append(rows, []string{marker, ui.Accent.Render(acc.ID), acc.Email, folders})
+		rows = append(rows, []string{marker, ui.Accent.Render(acc.ID), acc.Email, keySummary(acc), folders})
 	}
 	widths := make([]int, len(rows[0]))
 	for _, row := range rows {
@@ -64,13 +64,18 @@ func (a *app) cmdLs(args []string) int {
 	return 0
 }
 
-const addUsage = `doppel add <id> --name <name> --email <email> [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default] [--dry-run] [--yes]`
+const addUsage = `doppel add <id> --name <name> --email <email> [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default] [--dry-run] [--yes]
+  Keys: [--auth-key <key> | --generate-auth-key]
+        [--signing-key <key> | --generate-signing-key | --sign-with-auth-key | --no-signing]
+        [--sign-commits=false] [--sign-tags=false]`
 
 func (a *app) cmdAdd(args []string) int {
 	fs := newFlagSet("add")
 	var f accountFlags
+	var k keyFlags
 	var w writeFlags
 	f.register(fs)
+	k.register(fs)
 	w.register(fs)
 	positional, code, ok := a.parseCommand(fs, args, addUsage)
 	if !ok {
@@ -98,6 +103,10 @@ func (a *app) cmdAdd(args []string) int {
 	if err := acc.Validate(); err != nil {
 		return a.fail(err)
 	}
+	pending, err := a.applyKeys(fs, k, acc)
+	if err != nil {
+		return a.fail(err)
+	}
 	if err := a.bindFolders(list, acc, f.folders, w); err != nil {
 		return a.fail(err)
 	}
@@ -105,17 +114,23 @@ func (a *app) cmdAdd(args []string) int {
 	if len(list) == 1 || f.makeDefault {
 		accounts.SetDefault(list, acc)
 	}
-	return a.save(list, w, fmt.Sprintf("Added account %s", id))
+	a.warnSharedKeys(list)
+	return a.save(list, w, fmt.Sprintf("Added account %s", id), pending...)
 }
 
 const editUsage = `doppel edit <id> [--name <name>] [--email <email>] [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default[=false]] [--dry-run] [--yes]
-  --host and --folder replace the account's current list.`
+  Keys: [--auth-key <key> | --generate-auth-key]
+        [--signing-key <key> | --generate-signing-key | --sign-with-auth-key | --no-signing]
+        [--sign-commits=false] [--sign-tags=false]
+  --host and --folder replace the account's current list; --auth-key "" goes back to ssh's own keys.`
 
 func (a *app) cmdEdit(args []string) int {
 	fs := newFlagSet("edit")
 	var f accountFlags
+	var k keyFlags
 	var w writeFlags
 	f.register(fs)
+	k.register(fs)
 	w.register(fs)
 	positional, code, ok := a.parseCommand(fs, args, editUsage)
 	if !ok {
@@ -161,10 +176,18 @@ func (a *app) cmdEdit(args []string) int {
 		}
 		changed = true
 	}
+	pending, err := a.applyKeys(fs, k, acc)
+	if err != nil {
+		return a.fail(err)
+	}
+	for _, name := range keyFlagNames {
+		changed = changed || flagWasSet(fs, name)
+	}
 	if !changed {
 		return a.usageError(editUsage)
 	}
-	return a.save(list, w, fmt.Sprintf("Updated account %s", acc.ID))
+	a.warnSharedKeys(list)
+	return a.save(list, w, fmt.Sprintf("Updated account %s", acc.ID), pending...)
 }
 
 const rmUsage = "doppel rm <id> [--dry-run] [--yes]"

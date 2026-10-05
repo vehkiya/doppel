@@ -9,10 +9,19 @@ import (
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
-// save writes accounts as the complete set of accounts, or with --dry-run
-// shows what would change.
-func (a *app) save(list []*accounts.Account, w writeFlags, done string) int {
+// save writes list as the complete set of accounts, first generating any
+// pending keys. With --dry-run it shows what would change instead.
+func (a *app) save(list []*accounts.Account, w writeFlags, done string, pending ...pendingKey) int {
 	if err := accounts.ValidateAll(a.env, list); err != nil {
+		return a.fail(err)
+	}
+	var opts store.Options
+	if w.dryRun {
+		for _, k := range pending {
+			a.notef("Dry run: would generate the %s %s", k.purpose, a.env.Shorten(k.path))
+		}
+		opts.PublicKey = a.dryRunKeys(pending)
+	} else if err := a.generateKeys(pending); err != nil {
 		return a.fail(err)
 	}
 	p, err := plan.New()
@@ -20,10 +29,14 @@ func (a *app) save(list []*accounts.Account, w writeFlags, done string) int {
 		return a.fail(err)
 	}
 	defer p.Close()
-	if err := store.Stage(a.env, p, list); err != nil {
+	if err := store.Stage(a.env, p, list, opts); err != nil {
 		return a.fail(err)
 	}
-	return a.finish(p, w, done)
+	code := a.finish(p, w, done)
+	if code == 0 && !w.dryRun && len(pending) > 0 {
+		a.notef("Load new keys into your agent so Git doesn't ask for the passphrase on every commit: ssh-add <key>")
+	}
+	return code
 }
 
 // finish applies a plan, or prints it for --dry-run.

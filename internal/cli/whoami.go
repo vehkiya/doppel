@@ -8,17 +8,21 @@ import (
 
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
-const whoamiUsage = "doppel whoami [path]"
+const whoamiUsage = "doppel whoami [path] [--offline]"
 
 // Settings whoami checks come from the account in effect.
 var identityKeys = []string{accounts.KeyName, accounts.KeyEmail, accounts.KeySigningKey, accounts.KeyGPGFormat, accounts.KeyCommitSign, accounts.KeyTagSign, accounts.KeySSHCommand}
 
 func (a *app) cmdWhoami(args []string) int {
-	positional, code, ok := a.parseCommand(newFlagSet("whoami"), args, whoamiUsage)
+	fs := newFlagSet("whoami")
+	var offline bool
+	fs.BoolVar(&offline, "offline", false, "don't try logging in to the repo's host")
+	positional, code, ok := a.parseCommand(fs, args, whoamiUsage)
 	if !ok {
 		return code
 	}
@@ -52,12 +56,12 @@ func (a *app) cmdWhoami(args []string) int {
 	if err != nil {
 		return a.whoamiOutsideRepo(list, path)
 	}
-	return a.whoamiInRepo(list, dir, strings.TrimSpace(gitDir))
+	return a.whoamiInRepo(list, dir, strings.TrimSpace(gitDir), offline)
 }
 
 // whoamiInRepo asks Git which account applies, so the answer always matches
 // what Git does, then explains it.
-func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string) int {
+func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offline bool) int {
 	out, err := git.Run(path, "config", "--show-scope", "--show-origin", "--list", "--null")
 	if err != nil {
 		return a.fail(err)
@@ -91,15 +95,22 @@ func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string) int {
 	}
 	a.row("Name", value(accounts.KeyName))
 	a.row("Email", value(accounts.KeyEmail))
-	if ssh := value(accounts.KeySSHCommand); ssh == "ssh" {
-		a.row("SSH", "your default SSH keys")
-	} else {
+	switch ssh := value(accounts.KeySSHCommand); {
+	case acc != nil && acc.AuthKey != "" && ssh == accounts.SSHCommand(acc.AuthKey):
+		a.row("Auth key", acc.AuthKey+ui.Dim.Render(a.keyStatus(acc.AuthKey)))
+	case ssh == "ssh":
+		a.row("Auth key", "your default SSH keys")
+	default:
 		a.row("SSH", ssh)
 	}
 	if accounts.ParseBool(value(accounts.KeyCommitSign)) || accounts.ParseBool(value(accounts.KeyTagSign)) {
 		a.row("Signing", fmt.Sprintf("%s · %s", signingScope(value(accounts.KeyCommitSign), value(accounts.KeyTagSign)), value(accounts.KeySigningKey)))
 	} else {
 		a.row("Signing", "off")
+	}
+
+	if acc != nil && !offline {
+		a.loginRow(acc, path)
 	}
 
 	// path may be a plain folder inside an enclosing repo, such as a home
@@ -232,4 +243,93 @@ func signingScope(commits, tags string) string {
 		return "commits"
 	}
 	return "tags"
+}
+
+// keyStatus describes how a key is kept, such as " (passphrase, in agent)".
+func (a *app) keyStatus(key string) string {
+	path := a.env.Expand(key)
+	status := []string{keys.CheckProtection(path).String()}
+	if loaded, running := keys.InAgent(path); running && loaded {
+		status = append(status, "in agent")
+	}
+	return " (" + strings.Join(status, ", ") + ")"
+}
+
+// loginRow tries the account's key on the repo's remote host, without
+// asking for anything: a passphrase prompt in whoami would get in the way.
+func (a *app) loginRow(acc *accounts.Account, repo string) {
+	url := remoteURL(repo)
+	if url == "" {
+		return
+	}
+	host := sshHost(url)
+	if host == "" {
+		a.row("Login", ui.Dim.Render("the remote uses "+urlScheme(url)+", which doppel's SSH keys don't cover"))
+		return
+	}
+	if ok, detail := a.checkLogin(acc, host, true); ok {
+		a.row("Login", ui.OK.Render("✓")+" "+host+": "+detail)
+	} else {
+		a.row("Login", ui.Error.Render("✗")+" "+host+": "+detail+ui.Dim.Render(" (try `doppel test "+acc.ID+"`)"))
+	}
+}
+
+// remoteURL returns the URL of the repo's origin remote, or of its first
+// remote when there's no origin.
+func remoteURL(repo string) string {
+	out, err := git.Run(repo, "remote")
+	if err != nil {
+		return ""
+	}
+	remotes := strings.Fields(out)
+	if len(remotes) == 0 {
+		return ""
+	}
+	name := remotes[0]
+	for _, r := range remotes {
+		if r == "origin" {
+			name = r
+		}
+	}
+	url, err := git.Run(repo, "remote", "get-url", name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(url)
+}
+
+// sshHost returns the host of an SSH remote URL (ssh://[user@]host[:port]/path
+// or the scp-like [user@]host:path), or "" for any other kind of remote.
+func sshHost(url string) string {
+	if rest, ok := strings.CutPrefix(url, "ssh://"); ok {
+		hostPart, _, _ := strings.Cut(rest, "/")
+		if at := strings.LastIndex(hostPart, "@"); at >= 0 {
+			hostPart = hostPart[at+1:]
+		}
+		if strings.HasPrefix(hostPart, "[") { // an IPv6 address
+			hostPart, _, _ = strings.Cut(strings.TrimPrefix(hostPart, "["), "]")
+			return hostPart
+		}
+		hostPart, _, _ = strings.Cut(hostPart, ":")
+		return hostPart
+	}
+	if strings.Contains(url, "://") {
+		return ""
+	}
+	colon := strings.Index(url, ":")
+	if colon <= 0 || strings.Contains(url[:colon], "/") {
+		return "" // a local path
+	}
+	hostPart := url[:colon]
+	if at := strings.LastIndex(hostPart, "@"); at >= 0 {
+		hostPart = hostPart[at+1:]
+	}
+	return hostPart
+}
+
+func urlScheme(url string) string {
+	if scheme, _, ok := strings.Cut(url, "://"); ok {
+		return strings.ToUpper(scheme)
+	}
+	return "a local path"
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
 	"github.com/vehkiya/doppel/internal/version"
@@ -28,6 +29,9 @@ type app struct {
 	stdout      io.Writer
 	stderr      io.Writer
 	interactive bool // stdin is a terminal, so confirmations can be asked
+
+	generate func(path, comment string) error // creates a key, asking for its passphrase
+	copy     func(text string) error          // puts text on the clipboard
 }
 
 func (a *app) printf(format string, args ...any) {
@@ -106,6 +110,10 @@ func newApp() (*app, error) {
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 		interactive: term.IsTerminal(os.Stdin.Fd()),
+		generate: func(path, comment string) error {
+			return keys.Generate(path, comment, nil, os.Stdin, os.Stdout, os.Stderr)
+		},
+		copy: copyToClipboard,
 	}, nil
 }
 
@@ -137,6 +145,8 @@ func (a *app) run(args []string) int {
 		"unbind":    a.cmdUnbind,
 		"default":   a.cmdDefault,
 		"whoami":    a.cmdWhoami,
+		"export":    a.cmdExport,
+		"test":      a.cmdTest,
 		"uninstall": a.cmdUninstall,
 	}
 	handler, ok := commands[cmd]
@@ -157,7 +167,7 @@ func (a *app) printUsage() {
   doppel ls                              List accounts
   doppel add <id> --name <name> --email <email> [--host <host>]...
              [--github-user <user>] [--folder <folder>]... [--default]
-                                         Add an account
+             [key flags]                 Add an account
   doppel edit <id> [same flags as add]   Change an account (--host and --folder
                                          replace the current list)
   doppel rm <id>                         Delete an account (key files are kept)
@@ -165,9 +175,21 @@ func (a *app) printUsage() {
   doppel bind <id> <folder>...           Use an account for repos in these folders
   doppel unbind <folder>...              Remove folder rules
   doppel default [<id> | --none]         Show or set the default account
-  doppel whoami [path]                   Show which account applies, and why
+  doppel whoami [path] [--offline]       Show which account applies, and why
+  doppel test [<id>]                     Log in to each host and sign a test message
+  doppel export <id> [--auth|--signing]  Print and copy a public key, with where to add it
   doppel uninstall                       Remove doppel's include from your Git config
   doppel version                         Show the version
+
+Key flags (add and edit):
+  --auth-key <key>         SSH key for fetching and pushing ("" for ssh's own keys)
+  --generate-auth-key      generate ~/.ssh/id_ed25519_<id> (asks for a passphrase)
+  --signing-key <key>      SSH key for signing commits and tags
+  --generate-signing-key   generate ~/.ssh/id_ed25519_<id>_signing
+  --sign-with-auth-key     sign with the auth key
+  --no-signing             stop signing
+  --sign-commits=false, --sign-tags=false
+                           sign only tags, or only commits
 
 Commands that change files accept:
   --dry-run   show the changes without writing them
