@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "mergeConfidence:all-badges",
+    ":semanticCommits",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "minimumReleaseAge": "3 days",
+  "rebaseWhen": "behind-base-branch",
+  "packageRules": [
+    {
+      "description": "Bump Go version in go.mod and group it",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "rangeStrategy": "bump",
+      "groupName": "Go"
+    },
+    {
+      "description": "Group GitHub Actions setup-go Go version updates",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["go", "actions/go-versions"],
+      "matchDepNames": ["go", "actions/go-versions"],
+      "groupName": "Go"
+    },
+    {
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "automerge": true
+    }
+  ]
+}
