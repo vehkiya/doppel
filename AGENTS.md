@@ -19,7 +19,7 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `plan` is a leaf, and `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`. `plan` and `keys` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
 * Export only what another package needs. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
@@ -59,5 +59,6 @@ Keep styling consistent with sshx's palette (`internal/ui/palette.go`):
 * **Errors / Destructive actions:** Red (`#FF4672`)
 
 ### 2.5 Testing
-* Tests never touch the real home directory or Git config. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` variable that could leak in a developer's own setup.
+* Tests never touch the real home directory, Git config or ssh-agent. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` and `SSH_*` variable that could leak in a developer's own setup or open a passphrase dialog.
+* Make test keys with `Sandbox.Key` (real `ssh-keygen`, so signatures really verify). Never contact a real host: stand in for `ssh` with `Sandbox.FakeSSH`.
 * Prefer end-to-end tests that run doppel and then ask real `git` what applies in a repo, over tests of internal functions.

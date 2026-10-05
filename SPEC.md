@@ -82,18 +82,24 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 - **R3.1** Choose an existing key from `~/.ssh`, enter a custom path, or generate a new Ed25519 key. Generated keys are named `~/.ssh/id_ed25519_<account>`.
 - **R3.2** Generation asks for a passphrase and warns, without blocking, if it's left empty.
+  - `ssh-keygen` asks on the terminal, so generating needs one. Without a terminal, doppel stops and suggests generating the key yourself and passing it with `--auth-key` or `--signing-key`.
+  - `--dry-run` doesn't generate anything. It says which key would be created, and the `allowed_signers` diff shows a placeholder where its public key would go.
 - **R3.3** A key can be given as a `.pub` file only, when its private half lives in an agent (for example 1Password or a hardware key).
 - **R3.4** Stored as `doppel.authKey` and applied as `core.sshCommand = ssh -i <key> -o IdentitiesOnly=yes`. `IdentitiesOnly` stops ssh-agent from offering another account's key first; GitHub logs you in as whichever account owns the first key that works. An account without an auth key sets `core.sshCommand = ssh`, so it never inherits another account's key.
 - **R3.5** GitHub only lets a key belong to one account. doppel warns when two accounts that share a host use the same auth key.
-- **R3.6** Login check: for each host, run `ssh -T git@<host>` with the account's key and look for the expected username in the greeting. For example, GitHub replies "Hi `<username>`!", GitLab "Welcome to GitLab, `@<username>`!", and Gitea/Forgejo "Hi there, `<username>`!".
+- **R3.6** Login check: for each host, run `ssh -T git@<host>` with the account's key and look for the expected username in the greeting.
+  - `doppel test` runs it, and lets ssh ask for a passphrase or whether to trust a new host.
+  - `whoami` runs it for the repo's remote host without letting ssh ask anything (`--offline` skips it). If the key has a passphrase and isn't loaded in the agent, it says so and suggests `ssh-add`, rather than reporting the key as rejected.
+  - On GitHub, a login as a different user than the account's GitHub username counts as a failure. For example, GitHub replies "Hi `<username>`!", GitLab "Welcome to GitLab, `@<username>`!", and Gitea/Forgejo "Hi there, `<username>`!".
 
 ### R4. Signing key
 
 - **R4.1** Choice: none, the same key as the auth key, or a separate key (existing, custom path, or generated as `~/.ssh/id_ed25519_<account>_signing`).
 - **R4.2** Sets `gpg.format = ssh`, `user.signingkey = <key>.pub`, `commit.gpgsign` and `tag.gpgsign`. With no signing key, both `gpgsign` settings are explicitly `false`.
 - **R4.3** `allowed_signers` has one entry per account (`<email> namespaces="git" <public key>`), kept inside a marked block that doppel owns. Entries outside the block, such as teammates' keys, are never touched. Changing an account's email or signing key updates its entry.
-- **R4.4** Uses the file in `gpg.ssh.allowedSignersFile` if one is set. Otherwise it uses `~/.ssh/allowed_signers` and sets that option.
-- **R4.5** Signing check: sign and verify a test message with `ssh-keygen -Y sign` and `ssh-keygen -Y verify`.
+- **R4.4** Uses the file in `gpg.ssh.allowedSignersFile` if one is set in the global config files themselves. Otherwise it uses `~/.ssh/allowed_signers` and sets that option in the generated index.
+- **R4.4a** If a signing key's public key can't be read when saving, doppel stops and names the fix (`doppel edit <id> --signing-key <key>` or `--no-signing`), rather than silently dropping that key from `allowed_signers`.
+- **R4.5** Signing check: sign and verify a test message with `ssh-keygen -Y sign` and `ssh-keygen -Y verify`, against the same `allowed_signers` file Git uses. `doppel test` runs it.
 
 ### R5. Getting keys onto hosts
 
@@ -104,7 +110,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - **Token scopes:** the token must have `admin:public_key` and/or `admin:ssh_signing_key`. If one is missing, doppel prints the exact `gh auth refresh -h github.com -s <scope>` command.
   - **Signed in:** if gh isn't installed or isn't signed in as that user, doppel falls back to `export`.
 - **R5.3 `export` (any host):**
-  - Prints the public key and copies it to the clipboard.
+  - Prints the public key and copies it to the clipboard. When two different keys are shown, nothing is copied; `--auth` or `--signing` picks one.
   - Gives step-by-step instructions, including which key type to choose, for GitHub, GitLab (usage type *Authentication*, *Signing*, or *Authentication & Signing*), Gitea/Forgejo, and other hosts.
   - When the same key is both the auth and signing key, it says to add it once with both uses where the host allows that.
 
@@ -169,7 +175,8 @@ doppel rename <id> <new-id>              Change an account's ID
 doppel bind <id> <folder>...             Bind folders to an account
 doppel unbind <folder>...                Remove folder bindings
 doppel default [<id> | --none]           Show or set the default account
-doppel whoami [path]                     Show which account applies here, and why
+doppel whoami [path] [--offline]         Show which account applies here, and why
+doppel test [<id>]                       Log in to each host and sign a test message
 doppel doctor                            Check every account for problems
 doppel export <id> [--auth|--signing]    Print and copy a public key, with host instructions
 doppel upload <id> [--auth|--signing]    Upload keys to GitHub with gh
@@ -180,6 +187,8 @@ Flags for add and edit:
   --name, --email, --host (repeatable), --github-user,
   --auth-key <path> | --generate-auth-key,
   --signing-key <path> | --generate-signing-key | --sign-with-auth-key | --no-signing,
+  --sign-commits=false, --sign-tags=false (sign only tags, or only commits),
+  --auth-key "" (edit: go back to ssh's own keys),
   --folder (repeatable), --default
 Global:
   --dry-run, --yes
@@ -285,11 +294,12 @@ Every account file sets every setting doppel manages, including a "reset" value 
     plan/      staged writes with backups and atomic replacement (what --dry-run previews)
     paths/     where files live; normalizing and matching folders
     git/       running git; reading and writing Git config files through it
+    keys/      reading, generating and checking SSH keys; the login and signing checks
     ui/        palette, styles and diff rendering
     version/   build version
     testenv/   a sandboxed home directory and Git environment for tests
   ```
-  Later milestones add `keys/` (generation, fingerprints, `allowed_signers`) and `github/` (uploads through gh).
+  A later milestone adds `github/` (uploads through gh).
 - The palette, badges and Huh theme are copied from sshx. The quality checks follow sshx's `AGENTS.md`: `gofmt -s`, `go test -race`, `golangci-lint`, a tidy `go.mod`. A doppel `AGENTS.md` adds the rules from §6.2 to §6.4.
 
 ### 6.7 Testing
@@ -314,7 +324,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
 ## 7. Milestones
 
 1. **Core:** account files, generated index, include block, default account, folders, `ls`, `whoami`, flag-based `add`/`edit`/`rm`/`bind`/`unbind`/`default`, `--dry-run`, `uninstall`.
-2. **Keys:** choosing and generating auth and signing keys, `allowed_signers` block, login check, signing check, `export`.
+2. **Keys:** choosing and generating auth and signing keys, `allowed_signers` block, login check, signing check, `test`, `export`.
 3. **Interactive:** Huh wizards for add and edit, the TUI list view, first-run import.
 4. **GitHub and checks:** `upload` through gh, `doctor`.
 5. **Release:** CI and release workflows, README, configsh integration.

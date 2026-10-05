@@ -22,13 +22,17 @@ func quoteValue(v string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
 }
 
-// RenderIndex generates index.gitconfig: the default account first, then one
-// rule per folder from broad to specific, because Git lets the last match
-// win. Folders are stored with a trailing "/", which Git extends to match
+// RenderIndex generates index.gitconfig: where Git finds allowed signers
+// (when signersFile isn't ""), the default account, then one rule per folder
+// from broad to specific, because Git lets the last match win. Folders are stored with a trailing "/", which Git extends to match
 // every repo inside them.
-func RenderIndex(env *paths.Env, list []*accounts.Account) []byte {
+func RenderIndex(env *paths.Env, list []*accounts.Account, signersFile string) []byte {
 	var b strings.Builder
 	b.WriteString(indexHeader)
+	if signersFile != "" {
+		fmt.Fprintf(&b, "\n# The signing keys Git trusts when it verifies signatures\n[gpg \"ssh\"]\n\tallowedSignersFile = %s\n",
+			quoteValue(env.Shorten(signersFile)))
+	}
 	if def := accounts.Default(list); def != nil {
 		fmt.Fprintf(&b, "\n# Default account, for repos outside every folder below\n[include]\n\tpath = %s\n",
 			quoteValue(env.Shorten(env.AccountPath(def.ID))))

@@ -15,11 +15,22 @@ import (
 	"github.com/vehkiya/doppel/internal/plan"
 )
 
+// Options adjusts how Stage reads keys.
+type Options struct {
+	// PublicKey reads a signing key's public half. It defaults to reading the
+	// key file; a dry run substitutes placeholders for keys it would generate.
+	PublicKey func(key string) (string, error)
+}
+
 // Stage plans every file change needed for list to be the whole set of
 // accounts: each account file, removal of files whose account is gone,
-// the generated index, and the include in the global Git config. Changes are
-// staged in that order, so Apply writes the global include last.
-func Stage(env *paths.Env, p *plan.Plan, list []*accounts.Account) error {
+// doppel's block in allowed_signers, the generated index, and the include in
+// the global Git config. Changes are staged in that order, so Apply writes
+// the global include last.
+func Stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options) error {
+	if opts.PublicKey == nil {
+		opts.PublicKey = defaultPublicKey
+	}
 	keep := map[string]bool{}
 	for _, a := range list {
 		path := env.AccountPath(a.ID)
@@ -56,7 +67,11 @@ func Stage(env *paths.Env, p *plan.Plan, list []*accounts.Account) error {
 		}
 	}
 
-	if err := p.SetContent(env.IndexPath(), RenderIndex(env, list)); err != nil {
+	signers, err := stageSigners(env, p, list, opts.PublicKey)
+	if err != nil {
+		return err
+	}
+	if err := p.SetContent(env.IndexPath(), RenderIndex(env, list, signers)); err != nil {
 		return err
 	}
 	return EnsureInclude(env, p)
