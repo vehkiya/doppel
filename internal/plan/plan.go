@@ -4,23 +4,27 @@ package plan
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/vehkiya/doppel/internal/atomicfile"
 )
 
 // Plan stages file changes so a command can preview them (--dry-run) or
-// apply them together. Files are edited as copies in a temporary directory;
+// apply them together. Files are edited as copies in a staging directory;
 // Apply then backs up and atomically replaces each file that changed.
 type Plan struct {
-	dir   string
-	files map[string]*plannedFile
-	order []string
+	stagingDir string
+	dir        string   // this plan's own directory in stagingDir, once it has one
+	created    []string // directories made for it, shallowest first
+	files      map[string]*plannedFile
+	order      []string
 }
 
 type plannedFile struct {
@@ -39,17 +43,86 @@ type Change struct {
 	Exists   bool // the file will exist afterwards
 }
 
-// New starts an empty plan. Close discards it.
-func New() (*Plan, error) {
-	dir, err := os.MkdirTemp("", "doppel-plan-")
-	if err != nil {
-		return nil, fmt.Errorf("creating staging directory: %w", err)
-	}
-	return &Plan{dir: dir, files: map[string]*plannedFile{}}, nil
+// staleAfter is how old a leftover plan directory must be before a new
+// plan deletes it. A plan lasts for one command, so an older one belongs to
+// a command that was killed before it could clean up.
+const staleAfter = time.Hour
+
+// New starts an empty plan. Its working copies go in a private (0700)
+// directory of its own inside stagingDir, made when the first file is
+// staged. The copies can hold secrets from the user's Git config, so doppel
+// keeps them in its own directory rather than the shared temp directory.
+// Close discards them.
+func New(stagingDir string) *Plan {
+	return &Plan{stagingDir: stagingDir, files: map[string]*plannedFile{}}
 }
 
-// Close discards the staged copies.
-func (p *Plan) Close() { _ = os.RemoveAll(p.dir) }
+// Close discards the staged copies, and the directories made for them once
+// they're empty, so a plan that was never applied leaves nothing behind.
+func (p *Plan) Close() {
+	if p.dir != "" {
+		_ = os.RemoveAll(p.dir)
+	}
+	for i := len(p.created) - 1; i >= 0; i-- {
+		_ = os.Remove(p.created[i]) // fails, as it should, when something else is in there
+	}
+}
+
+// workDir returns the plan's own directory, creating it on first use.
+func (p *Plan) workDir() (string, error) {
+	if p.dir != "" {
+		return p.dir, nil
+	}
+	for attempt := 1; ; attempt++ {
+		created, err := mkdirAll(p.stagingDir)
+		p.created = append(p.created, created...)
+		if err != nil {
+			return "", fmt.Errorf("creating staging directory: %w", err)
+		}
+		removeStale(p.stagingDir)
+		dir, err := os.MkdirTemp(p.stagingDir, "plan-")
+		if err == nil {
+			p.dir = dir
+			return dir, nil
+		}
+		// Another doppel command may have just removed the staging
+		// directory, finding it empty; make it again.
+		if !errors.Is(err, fs.ErrNotExist) || attempt == 3 {
+			return "", fmt.Errorf("creating staging directory: %w", err)
+		}
+	}
+}
+
+// mkdirAll is os.MkdirAll with mode 0700, returning the directories it
+// made, shallowest first.
+func mkdirAll(dir string) ([]string, error) {
+	var missing []string
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil || filepath.Dir(d) == d {
+			break
+		}
+		missing = append([]string{d}, missing...)
+	}
+	return missing, os.MkdirAll(dir, 0700)
+}
+
+// removeStale deletes plan directories left in stagingDir by commands that
+// were killed. A recent one may belong to a command still running, so it
+// stays.
+func removeStale(stagingDir string) {
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "plan-") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > staleAfter {
+			_ = os.RemoveAll(filepath.Join(stagingDir, e.Name()))
+		}
+	}
+}
 
 // Stage returns the working copy of path, creating it from the current file.
 // The copy doesn't exist when the file doesn't; `git config --file` creates it.
@@ -58,15 +131,19 @@ func (p *Plan) Stage(path string) (string, error) {
 		f.remove = false
 		return f.staged, nil
 	}
+	dir, err := p.workDir()
+	if err != nil {
+		return "", err
+	}
 	f := &plannedFile{
 		path:   path,
-		staged: filepath.Join(p.dir, fmt.Sprintf("%d-%s", len(p.order), filepath.Base(path))),
+		staged: filepath.Join(dir, fmt.Sprintf("%d-%s", len(p.order), filepath.Base(path))),
 	}
 	data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // doppel's own and Git config files
 	switch {
 	case err == nil:
 		f.old, f.existed = data, true
-		if err := os.WriteFile(f.staged, data, 0600); err != nil { //nolint:gosec // working copy inside the plan's own temp directory
+		if err := os.WriteFile(f.staged, data, 0600); err != nil { //nolint:gosec // working copy inside the plan's own staging directory
 			return "", err
 		}
 	case !errors.Is(err, fs.ErrNotExist):
@@ -83,7 +160,7 @@ func (p *Plan) SetContent(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(staged, data, 0600) //nolint:gosec // working copy inside the plan's own temp directory
+	return os.WriteFile(staged, data, 0600) //nolint:gosec // working copy inside the plan's own staging directory
 }
 
 // Remove plans to delete path.
@@ -137,6 +214,12 @@ var (
 	removeFile = os.Remove
 )
 
+// atomicWrite replaces path atomically. When path is a symlink, the file it
+// points to is replaced and the link is kept.
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	return atomicfile.Write(symlinkTarget(path), data, perm)
+}
+
 // StaleError means a file changed after the plan read it, so writing the
 // plan would undo whatever changed it.
 type StaleError struct{ Path string }
@@ -187,21 +270,11 @@ func (p *Plan) Apply() ([]Change, error) {
 		if !c.Existed {
 			continue
 		}
-		backup := BackupPath(c.Path)
-		previous, rerr := os.ReadFile(filepath.Clean(backup)) //nolint:gosec // doppel's own hidden backup
-		if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-			return fail(fmt.Errorf("backing up %s: %w", c.Path, rerr))
-		}
-		hadBackup := rerr == nil
-		if err := writeFile(backup, c.Old, 0600); err != nil {
+		steps, err := backUp(c.Path, c.Old)
+		done = append(done, steps...)
+		if err != nil {
 			return fail(fmt.Errorf("backing up %s: %w", c.Path, err))
 		}
-		done = append(done, undoStep{what: "restore " + backup, undo: func() error {
-			if hadBackup {
-				return writeFile(backup, previous, 0600)
-			}
-			return removeFile(backup)
-		}})
 	}
 	for _, c := range changes {
 		if !c.Exists {
@@ -212,7 +285,7 @@ func (p *Plan) Apply() ([]Change, error) {
 			return fail(err)
 		}
 		if c.Existed {
-			done = append(done, undoStep{what: "restore " + c.Path + " from " + BackupPath(c.Path), undo: func() error { return writeFile(c.Path, c.Old, mode) }})
+			done = append(done, undoStep{what: "restore " + c.Path + " from " + backupPath(c.Path, 0), undo: func() error { return writeFile(c.Path, c.Old, mode) }})
 		} else {
 			done = append(done, undoStep{what: "delete " + c.Path, undo: func() error { return removeFile(symlinkTarget(c.Path)) }})
 		}
@@ -228,7 +301,7 @@ func (p *Plan) Apply() ([]Change, error) {
 			}
 			return fail(err)
 		}
-		done = append(done, undoStep{what: "restore " + c.Path + " from " + BackupPath(c.Path), undo: func() error { return writeFile(c.Path, c.Old, mode) }})
+		done = append(done, undoStep{what: "restore " + c.Path + " from " + backupPath(c.Path, 0), undo: func() error { return writeFile(c.Path, c.Old, mode) }})
 	}
 	return changes, nil
 }
@@ -258,14 +331,66 @@ func fileMode(path string) os.FileMode {
 	return 0644
 }
 
-// BackupPath is where the previous version of a file is kept: a hidden file
-// alongside it, which Git never reads.
-func BackupPath(path string) string {
+// keptBackups is how many earlier versions of a file Apply keeps.
+const keptBackups = 3
+
+// backupPath is where an earlier version of a file is kept: a hidden file
+// alongside it, which Git never reads. Generation 0 is the version just
+// before the last change (.<name>.doppel.bak); older ones follow as
+// .<name>.doppel.bak.1 and .<name>.doppel.bak.2.
+func backupPath(path string, generation int) string {
 	name := filepath.Base(path)
 	if !strings.HasPrefix(name, ".") {
 		name = "." + name
 	}
-	return filepath.Join(filepath.Dir(path), name+".doppel.bak")
+	name += ".doppel.bak"
+	if generation > 0 {
+		name += "." + strconv.Itoa(generation)
+	}
+	return filepath.Join(filepath.Dir(path), name)
+}
+
+// backUp keeps old, the content path is about to lose, as its newest
+// backup, moving each earlier backup one generation older and dropping the
+// oldest. It returns how to undo each backup it wrote, including on error.
+func backUp(path string, old []byte) ([]undoStep, error) {
+	type backup struct {
+		data   []byte
+		exists bool
+	}
+	current := make([]backup, keptBackups)
+	for g := range current {
+		data, err := os.ReadFile(filepath.Clean(backupPath(path, g))) //nolint:gosec // doppel's own hidden backup
+		switch {
+		case err == nil:
+			current[g] = backup{data, true}
+		case !errors.Is(err, fs.ErrNotExist):
+			return nil, err
+		}
+	}
+
+	var done []undoStep
+	// Oldest first, so no backup is overwritten before it has moved on.
+	for g := keptBackups - 1; g >= 0; g-- {
+		next := backup{old, true}
+		if g > 0 {
+			next = current[g-1]
+		}
+		if !next.exists {
+			continue // nothing that old yet; leave this generation as it is
+		}
+		target, was := backupPath(path, g), current[g]
+		if err := writeFile(target, next.data, 0600); err != nil {
+			return done, err
+		}
+		done = append(done, undoStep{what: "restore " + target, undo: func() error {
+			if was.exists {
+				return writeFile(target, was.data, 0600)
+			}
+			return removeFile(target)
+		}})
+	}
+	return done, nil
 }
 
 // symlinkTarget returns the file a write to path should replace: path
@@ -287,54 +412,4 @@ func symlinkTarget(path string) string {
 		path = target
 	}
 	return path
-}
-
-// atomicWrite writes data to targetPath through a temporary file and a
-// rename, so the file is never left half-written. When targetPath is a
-// symlink, the file it points to is replaced and the link is kept.
-func atomicWrite(targetPath string, data []byte, perm os.FileMode) error {
-	targetPath = symlinkTarget(targetPath)
-
-	dir := filepath.Dir(targetPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("creating directory %s: %w", dir, err)
-	}
-
-	randBytes := make([]byte, 4)
-	if _, err := rand.Read(randBytes); err != nil {
-		return err
-	}
-	tmpName := filepath.Join(dir, fmt.Sprintf(".tmp.%s.%s", filepath.Base(targetPath), hex.EncodeToString(randBytes)))
-
-	tmpFile, err := os.OpenFile(filepath.Clean(tmpName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm) //nolint:gosec // temp file next to the target
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-
-	success := false
-	defer func() {
-		if !success {
-			_ = tmpFile.Close()
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmpFile.Write(data); err != nil {
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := tmpFile.Sync(); err != nil {
-		return fmt.Errorf("syncing temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		return fmt.Errorf("setting permissions on temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, targetPath); err != nil {
-		return fmt.Errorf("replacing %s: %w", targetPath, err)
-	}
-
-	success = true
-	return nil
 }

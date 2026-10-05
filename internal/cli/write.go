@@ -70,10 +70,7 @@ func (a *app) saveRemoving(removed, list []*accounts.Account, w writeFlags, done
 			return a.fail(err)
 		}
 	}
-	p, err := plan.New()
-	if err != nil {
-		return a.fail(err)
-	}
+	p := plan.New(a.env.StagingDir())
 	defer p.Close()
 	if err := store.Save(a.env, p, list, opts); err != nil {
 		return a.fail(err)

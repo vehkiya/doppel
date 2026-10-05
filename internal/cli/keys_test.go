@@ -101,6 +101,40 @@ func TestUserConfiguredSignersFile(t *testing.T) {
 	}
 }
 
+func TestSignersFileSetInAnIncludedFile(t *testing.T) {
+	s := newSandbox(t)
+	s.Write(".config/git/signing.inc", "[gpg \"ssh\"]\n\tallowedSignersFile = ~/team/allowed_signers\n")
+	s.Write(".gitconfig", "[include]\n\tpath = ~/.config/git/signing.inc\n")
+	s.Key("id_work", "jane@acme.com", "")
+	s.addAccount("work", "jane@acme.com", "--auth-key", "~/.ssh/id_work", "--sign-with-auth-key")
+
+	if !strings.Contains(s.Read("team/allowed_signers"), "jane@acme.com namespaces") {
+		t.Error("entry not written to the allowed_signers file set in the included file")
+	}
+	if s.Exists(".ssh/allowed_signers") || strings.Contains(s.Read(".config/doppel/index.gitconfig"), "allowedSignersFile") {
+		t.Error("doppel used its own allowed_signers file instead of the one the user configured")
+	}
+	if out := commitAndVerify(t, s.GitInit("repo")); !strings.Contains(out, `Good "git" signature`) {
+		t.Errorf("commit isn't verified:\n%s", out)
+	}
+}
+
+func TestIndexKeepsSettingTheSignersFileItChose(t *testing.T) {
+	s := newSandbox(t)
+	s.Key("id_work", "jane@acme.com", "")
+	s.addAccount("work", "jane@acme.com", "--auth-key", "~/.ssh/id_work", "--sign-with-auth-key")
+	// The index now sets allowedSignersFile itself. Reading the global
+	// config with its includes must not mistake that for the user's choice.
+	s.mustRun("edit", "work", "--name", "Jane A. Doe")
+
+	if !strings.Contains(s.Read(".config/doppel/index.gitconfig"), "allowedSignersFile = ~/.ssh/allowed_signers") {
+		t.Errorf("index stopped pointing Git at allowed_signers:\n%s", s.Read(".config/doppel/index.gitconfig"))
+	}
+	if out := commitAndVerify(t, s.GitInit("repo")); !strings.Contains(out, `Good "git" signature`) {
+		t.Errorf("commit isn't verified:\n%s", out)
+	}
+}
+
 func TestSignOnlyTags(t *testing.T) {
 	s := newSandbox(t)
 	s.Key("id_work", "jane@acme.com", "")

@@ -107,11 +107,13 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 | `doppel default [<id> \| --none]` | Shows or sets the default account |
 | `doppel whoami [path] [--offline]` | Shows which account applies, and why; tries the repo's host unless `--offline` |
 | `doppel test [<id>]` | Logs in to each host and signs and verifies a test message |
-| `doppel export <id> [--auth\|--signing]` | Prints and copies a public key, with where to add it on each host |
+| `doppel export <id> [--auth\|--signing] [--no-copy]` | Prints and copies a public key, with where to add it on each host (`--no-copy` only prints it) |
 | `doppel upload <id> [--auth\|--signing]` | Adds the keys to the account's GitHub user through `gh` |
 | `doppel doctor [--fix]` | Checks for anything that could make Git use the wrong account; `--fix` redoes doppel's own files |
-| `doppel update [--check] [--force]` | Installs the latest signed release over this binary (`--check` only looks) |
+| `doppel update [--check] [--force]` | Installs the latest signed release over this binary (`--check` only looks, `--force` reinstalls the current one) |
 | `doppel uninstall` | Removes doppel from your Git config and `allowed_signers`; accounts and keys are kept |
+
+`ls`, `rm` and `update` also answer to `list`, `remove` or `delete`, and `upgrade`.
 
 **Key flags** for `add` and `edit`:
 - Auth key: `--auth-key <key>` or `--generate-auth-key`. On `edit`, `--auth-key ""` goes back to ssh's own keys.
@@ -201,7 +203,7 @@ An account's GitHub username applies to all its GitHub hosts. Separate identitie
 ## 🛡️ Safety
 
 * **What changes:** doppel only changes two files of yours, and only with one block each: the include line in your global Git config and its block in `allowed_signers`. Everything else lives in `~/.config/doppel`.
-* **How it writes:** every write goes through a plan. `--dry-run` prints it as a diff. A real run writes atomically, keeps symlinks, and keeps a hidden `.<name>.doppel.bak` backup of every file it changes.
+* **How it writes:** every write goes through a plan. `--dry-run` prints it as a diff. A real run writes atomically, keeps symlinks, and keeps the last three versions of every file it changes as hidden backups next to it (`.<name>.doppel.bak`, then `.bak.1` and `.bak.2`). If any step fails, it puts back everything it already wrote.
 * **A damaged file can't lock doppel out:** doppel's own Git calls run without your global config, so even a broken folder-rules file can't stop doppel from rewriting it. doppel won't append to a `~/.gitconfig` that Git itself can't read.
 * **Key files:** doppel never overwrites or deletes them.
 * **Getting out:** `doppel uninstall` takes the include and the `allowed_signers` block back out.

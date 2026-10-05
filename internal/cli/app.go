@@ -229,12 +229,17 @@ func (a *app) printUsage() {
   doppel default [<id> | --none]         Show or set the default account
   doppel whoami [path] [--offline]       Show which account applies, and why
   doppel test [<id>]                     Log in to each host and sign a test message
-  doppel export <id> [--auth|--signing]  Print and copy a public key, with where to add it
+  doppel export <id> [--auth|--signing]
+             [--no-copy]                 Print and copy a public key, with where to add it
   doppel upload <id> [--auth|--signing]  Add the account's keys to its GitHub user (with gh)
   doppel doctor [--fix]                  Check every account for problems
-  doppel update [--check]                Install the latest signed release (--check only looks)
-  doppel uninstall                       Remove doppel's include from your Git config
+  doppel update [--check] [--force]      Install the latest signed release (--check only
+                                         looks, --force reinstalls the current one)
+  doppel uninstall                       Take doppel's blocks out of your Git config and
+                                         allowed_signers (accounts and keys are kept)
   doppel version                         Show the version
+
+ls, rm and update also answer to list, remove or delete, and upgrade.
 
 Key flags (add and edit):
   --auth-key <key>         SSH key for fetching and pushing ("" for ssh's own keys)

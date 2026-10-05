@@ -9,22 +9,29 @@ import (
 
 // FromGlobal reads the identity in the user's global Git config, for a first
 // account to start from: name and email, an SSH signing setup, and an auth
-// key named with -i in core.sshCommand. It reads the global files
-// themselves, so doppel's own accounts never show up here. ok is false when
-// there's no name and email to start from.
+// key named with -i in core.sshCommand. It reads the global files and the
+// files they include, as Git does, skipping doppel's own, so its accounts
+// never show up here. source is the file the name and email came from. ok
+// is false when there's no name and email to start from.
 func FromGlobal(env *paths.Env) (acc *Account, source string, ok bool) {
+	wanted := map[string]string{}
+	for _, key := range []string{KeyName, KeyEmail, KeySigningKey, KeyGPGFormat, KeyCommitSign, KeyTagSign, KeySSHCommand} {
+		wanted[strings.ToLower(key)] = key
+	}
 	last := map[string]string{}
 	for _, f := range env.GlobalConfigFiles() {
-		values, err := git.ReadConfigFile(f)
+		entries, err := git.ReadConfigFileIncludes(f, env.InDoppelDir)
 		if err != nil {
 			continue
 		}
-		for _, key := range []string{KeyName, KeyEmail, KeySigningKey, KeyGPGFormat, KeyCommitSign, KeyTagSign, KeySSHCommand} {
-			if v := values[strings.ToLower(key)]; len(v) > 0 {
-				last[key] = v[len(v)-1]
-				if key == KeyName || key == KeyEmail {
-					source = f
-				}
+		for _, e := range entries {
+			key, ok := wanted[e.Key]
+			if !ok {
+				continue
+			}
+			last[key] = e.Value
+			if key == KeyName || key == KeyEmail {
+				source = e.Origin
 			}
 		}
 	}

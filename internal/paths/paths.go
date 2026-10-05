@@ -52,6 +52,15 @@ func (e *Env) AccountPath(id string) string {
 // IndexPath is the generated file holding the default account and folder rules.
 func (e *Env) IndexPath() string { return filepath.Join(e.DoppelDir(), "index.gitconfig") }
 
+// StagingDir is where plans keep their working copies until they're applied.
+func (e *Env) StagingDir() string { return filepath.Join(e.DoppelDir(), ".staging") }
+
+// InDoppelDir reports whether path is one of doppel's own files, such as the
+// index or an account file.
+func (e *Env) InDoppelDir(path string) bool {
+	return e.FolderContains(e.DoppelDir()+"/", path)
+}
+
 // GlobalConfigPath is the global Git config file that gets doppel's include:
 // the file `git config --global` writes to, which Git also reads last.
 func (e *Env) GlobalConfigPath() string {

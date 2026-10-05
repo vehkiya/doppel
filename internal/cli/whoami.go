@@ -91,7 +91,7 @@ func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offlin
 		if resolved, err := filepath.EvalSymlinks(gitDir); err == nil {
 			real = resolved
 		}
-		a.row("Account", ui.Accent.Render(acc.ID)+ui.Dim.Render(" ("+a.ruleFor(acc, real)+")"))
+		a.row("Account", ui.Accent.Render(acc.ID)+ui.Dim.Render(" ("+a.ruleFor(list, acc, real)+")"))
 	}
 	a.row("Name", value(accounts.KeyName))
 	a.row("Email", value(accounts.KeyEmail))
@@ -135,28 +135,17 @@ func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offlin
 	return 0
 }
 
-// ruleFor explains why acc applies to a repo: the most specific of its
-// folders that holds the repo, or being the default account.
-func (a *app) ruleFor(acc *accounts.Account, gitDir string) string {
-	if folder, ok := a.deepestFolder(acc.Folders, gitDir); ok {
-		return "folder " + folder
+// ruleFor explains why Git applied acc to a repo: the folder rule that
+// picks it, or being the default account. "matched by Git" covers anything
+// else, such as an index that doesn't match the account files yet.
+func (a *app) ruleFor(list []*accounts.Account, acc *accounts.Account, gitDir string) string {
+	if r, ok := accounts.MatchFolder(a.env, list, gitDir); ok && r.ID == acc.ID {
+		return "folder " + r.Folder
 	}
-	switch {
-	case acc.Default:
+	if acc.Default {
 		return "default account"
 	}
 	return "matched by Git"
-}
-
-// deepestFolder returns the most specific of folders that holds path.
-func (a *app) deepestFolder(folders []string, path string) (string, bool) {
-	best, found := "", false
-	for _, f := range folders {
-		if a.env.FolderContains(f, path) && (!found || a.env.FolderDepth(f) > a.env.FolderDepth(best)) {
-			best, found = f, true
-		}
-	}
-	return best, found
 }
 
 // warnOverrides points out identity settings that don't come from a doppel
@@ -212,18 +201,11 @@ func (a *app) whoamiOutsideRepo(list []*accounts.Account, path string) int {
 }
 
 // folderRule returns the account a new repo at path (a real path) would get,
-// and the rule that picks it: the most specific bound folder, or else the
+// and the rule that picks it: the folder rule Git would apply, or else the
 // default account. It returns "" when no account applies.
 func (a *app) folderRule(list []*accounts.Account, path string) (id, rule string) {
-	var match *accounts.Account
-	best := ""
-	for _, acc := range list {
-		if f, ok := a.deepestFolder(acc.Folders, path); ok && (match == nil || a.env.FolderDepth(f) > a.env.FolderDepth(best)) {
-			match, best = acc, f
-		}
-	}
-	if match != nil {
-		return match.ID, "folder " + best
+	if r, ok := accounts.MatchFolder(a.env, list, path); ok {
+		return r.ID, "folder " + r.Folder
 	}
 	if def := accounts.Default(list); def != nil {
 		return def.ID, "default account"

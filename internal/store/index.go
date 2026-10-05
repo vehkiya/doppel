@@ -2,7 +2,6 @@ package store
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/accounts"
@@ -22,11 +21,11 @@ func quoteValue(v string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
 }
 
-// RenderIndex generates index.gitconfig: where Git finds allowed signers
-// (when signersFile isn't ""), the default account, then one rule per folder
-// from broad to specific, because Git lets the last match win. Folders are stored with a trailing "/", which Git extends to match
-// every repo inside them.
-func RenderIndex(env *paths.Env, list []*accounts.Account, signersFile string) []byte {
+// renderIndex generates index.gitconfig: where Git finds allowed signers
+// (when signersFile isn't ""), the default account, then the folder rules in
+// accounts.FolderRules order. Folders are stored with a trailing "/", which
+// Git extends to match every repo inside them.
+func renderIndex(env *paths.Env, list []*accounts.Account, signersFile string) []byte {
 	var b strings.Builder
 	b.WriteString(indexHeader)
 	if signersFile != "" {
@@ -38,21 +37,7 @@ func RenderIndex(env *paths.Env, list []*accounts.Account, signersFile string) [
 			quoteValue(env.Shorten(env.AccountPath(def.ID))))
 	}
 
-	type rule struct{ folder, id string }
-	var rules []rule
-	for _, a := range list {
-		for _, f := range a.Folders {
-			rules = append(rules, rule{f, a.ID})
-		}
-	}
-	sort.SliceStable(rules, func(i, j int) bool {
-		di, dj := env.FolderDepth(rules[i].folder), env.FolderDepth(rules[j].folder)
-		if di != dj {
-			return di < dj
-		}
-		return rules[i].folder < rules[j].folder
-	})
-
+	rules := accounts.FolderRules(env, list)
 	condition := "gitdir:"
 	if env.CaseInsensitive() {
 		condition = "gitdir/i:"
@@ -61,8 +46,8 @@ func RenderIndex(env *paths.Env, list []*accounts.Account, signersFile string) [
 		b.WriteString("\n# Folder rules, from broad to specific (the last match wins)\n")
 	}
 	for _, r := range rules {
-		fmt.Fprintf(&b, "[includeIf \"%s%s\"]\n\tpath = %s\n", condition, r.folder,
-			quoteValue(env.Shorten(env.AccountPath(r.id))))
+		fmt.Fprintf(&b, "[includeIf \"%s%s\"]\n\tpath = %s\n", condition, r.Folder,
+			quoteValue(env.Shorten(env.AccountPath(r.ID))))
 	}
 	return []byte(b.String())
 }

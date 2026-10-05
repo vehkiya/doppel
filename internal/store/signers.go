@@ -23,18 +23,24 @@ const (
 // with: the one the user configured in gpg.ssh.allowedSignersFile, or else
 // ~/.ssh/allowed_signers. configured reports whether the user set it; if
 // not, the index has to point Git at the default file.
+//
+// The global config files are read with the files they include, as Git
+// reads them, so a setting kept in an included file counts. doppel's own
+// files are skipped: the index sets the value when the user hasn't.
 func SignersFile(env *paths.Env) (path string, configured bool, err error) {
 	for _, f := range env.GlobalConfigFiles() {
-		values, err := git.ReadConfigFile(f)
+		entries, err := git.ReadConfigFileIncludes(f, env.InDoppelDir)
 		if err != nil {
 			return "", false, err
 		}
-		if v := values["gpg.ssh.allowedsignersfile"]; len(v) > 0 && v[len(v)-1] != "" {
-			path, configured = env.Expand(v[len(v)-1]), true
+		for _, e := range entries {
+			if e.Key == "gpg.ssh.allowedsignersfile" {
+				path, configured = e.Value, e.Value != ""
+			}
 		}
 	}
 	if configured {
-		return path, true, nil
+		return env.Expand(path), true, nil
 	}
 	return filepath.Join(env.Home, ".ssh", "allowed_signers"), false, nil
 }

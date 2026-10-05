@@ -35,9 +35,9 @@ func TestKnownHost(t *testing.T) {
 		"gist.github.com": "",
 	}
 	for host, want := range cases {
-		got, ok := KnownHost(host)
+		got, ok := knownHost(host)
 		if got != want || ok != (want != "") {
-			t.Errorf("KnownHost(%q) = %q, %v; want %q", host, got, ok, want)
+			t.Errorf("knownHost(%q) = %q, %v; want %q", host, got, ok, want)
 		}
 	}
 }

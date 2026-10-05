@@ -37,11 +37,11 @@ func TestRenderSigners(t *testing.T) {
 func TestRenderIndexPointsGitAtTheSignersFile(t *testing.T) {
 	env := &paths.Env{Home: "/home/jane", ConfigDir: "/home/jane/.config", GOOS: "linux"}
 	list := []*accounts.Account{{ID: "work", Default: true}}
-	got := string(RenderIndex(env, list, "/home/jane/.ssh/allowed_signers"))
+	got := string(renderIndex(env, list, "/home/jane/.ssh/allowed_signers"))
 	if !strings.Contains(got, "[gpg \"ssh\"]\n\tallowedSignersFile = ~/.ssh/allowed_signers\n") {
 		t.Errorf("index doesn't set allowedSignersFile:\n%s", got)
 	}
-	if got := string(RenderIndex(env, list, "")); strings.Contains(got, "allowedSignersFile") {
+	if got := string(renderIndex(env, list, "")); strings.Contains(got, "allowedSignersFile") {
 		t.Errorf("index sets allowedSignersFile when it shouldn't:\n%s", got)
 	}
 }

@@ -19,10 +19,10 @@ import (
 // DotCom is GitHub's own host, which GitHub Enterprise Cloud shares.
 const DotCom = "github.com"
 
-// KnownHost recognizes GitHub hosts by name: github.com, its port-443 SSH
+// knownHost recognizes GitHub hosts by name: github.com, its port-443 SSH
 // endpoint ssh.github.com, and GHE.com subdomains (GitHub Enterprise Cloud
 // with data residency). apiHost is the host gh talks to for it.
-func KnownHost(host string) (apiHost string, ok bool) {
+func knownHost(host string) (apiHost string, ok bool) {
 	h := strings.ToLower(host)
 	switch {
 	case h == DotCom || h == "ssh."+DotCom:
@@ -34,11 +34,11 @@ func KnownHost(host string) (apiHost string, ok bool) {
 }
 
 // APIHost tells whether host is GitHub, and which host gh talks to for it.
-// Beyond the names KnownHost recognizes, a host gh is signed in to counts:
+// Beyond the names knownHost recognizes, a host gh is signed in to counts:
 // gh only signs in to GitHub, so that's how GitHub Enterprise Server is
 // found. The check is local; nothing connects.
 func APIHost(host string) (string, bool) {
-	if api, ok := KnownHost(host); ok {
+	if api, ok := knownHost(host); ok {
 		return api, true
 	}
 	if !Available() {
@@ -66,8 +66,8 @@ var scopes = map[Kind][]string{
 	Signing:        {"admin:ssh_signing_key", "write:ssh_signing_key"},
 }
 
-// RefreshScope is the scope to ask for when a token can't add a kind of key.
-func RefreshScope(k Kind) string { return scopes[k][0] }
+// refreshScope is the scope to ask for when a token can't add a kind of key.
+func refreshScope(k Kind) string { return scopes[k][0] }
 
 // Available reports whether gh is installed.
 func Available() bool {
@@ -208,8 +208,8 @@ func MissingScopes(granted []string, kinds ...Kind) []string {
 	var missing []string
 	for _, k := range kinds {
 		ok := slices.ContainsFunc(scopes[k], func(s string) bool { return slices.Contains(granted, s) })
-		if !ok && !slices.Contains(missing, RefreshScope(k)) {
-			missing = append(missing, RefreshScope(k))
+		if !ok && !slices.Contains(missing, refreshScope(k)) {
+			missing = append(missing, refreshScope(k))
 		}
 	}
 	return missing

@@ -128,11 +128,7 @@ func (a *app) cmdDoctor(args []string) int {
 // doctorFiles checks doppel's place in the global Git config and that its
 // files say what the accounts say. With fix, it rewrites them first.
 func (a *app) doctorFiles(r *report, list []*accounts.Account, fix bool) {
-	p, err := plan.New()
-	if err != nil {
-		r.problem("", "%v", err)
-		return
-	}
+	p := plan.New(a.env.StagingDir())
 	defer p.Close()
 	// Save validates the accounts first, so a hand-edited folder that would
 	// break Git's config is reported here rather than written by --fix.
