@@ -69,8 +69,9 @@ func mixedPlan(t *testing.T) (dir string, p *Plan) {
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Close)
-	for path, content := range map[string]string{"a.conf": "a new\n", "b.conf": "b new\n", "c.conf": "c new\n"} {
-		if err := p.SetContent(filepath.Join(dir, path), []byte(content)); err != nil {
+	// In this order, which is the order Apply writes them in.
+	for _, name := range []string{"a", "b", "c"} {
+		if err := p.SetContent(filepath.Join(dir, name+".conf"), []byte(name+" new\n")); err != nil {
 			t.Fatal(err)
 		}
 	}
