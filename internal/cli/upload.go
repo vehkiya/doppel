@@ -61,8 +61,9 @@ func (a *app) cmdUpload(args []string) int {
 		return a.cmdExport(exportArgs)
 	}
 
+	spelling := ""
 	for _, apiHost := range apiHosts {
-		code, fallBack := a.uploadTo(apiHost, acc, exported)
+		code, fallBack := a.uploadTo(apiHost, acc, exported, &spelling)
 		if fallBack {
 			return a.cmdExport(exportArgs)
 		}
@@ -70,7 +71,26 @@ func (a *app) cmdUpload(args []string) int {
 			return code
 		}
 	}
+	if spelling != "" {
+		a.offerGitHubUser(list, acc, spelling)
+	}
 	return 0
+}
+
+// offerGitHubUser offers to store the GitHub user the way GitHub and gh
+// spell it, when the account has it differently in capitals. gh matches the
+// name exactly, so the other spelling only works because doppel looked it up.
+func (a *app) offerGitHubUser(list []*accounts.Account, acc *accounts.Account, login string) {
+	if !a.interactive {
+		a.notef("GitHub spells the user %s, not %s. Correct it with: doppel edit %s --github-user %s", login, acc.GitHubUser, acc.ID, login)
+		return
+	}
+	question := fmt.Sprintf("GitHub spells the user %s, not %s. Correct account %s?", login, acc.GitHubUser, acc.ID)
+	if err := a.confirm(question, false); err != nil {
+		return // declined, or the question was cancelled; the upload itself worked
+	}
+	acc.GitHubUser = login
+	a.save(list, writeFlags{}, fmt.Sprintf("Updated account %s", acc.ID))
 }
 
 // githubHosts lists the hosts gh talks to for the account's GitHub hosts.
@@ -87,22 +107,27 @@ func githubHosts(acc *accounts.Account) []string {
 
 // uploadTo adds keys to the account's user on one GitHub host. fallBack is
 // true when gh isn't signed in as that user, so manual steps should follow.
-func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exportedKey) (code int, fallBack bool) {
+// When gh spells the user differently in capitals than the account does,
+// that spelling is left in *spelling.
+func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exportedKey, spelling *string) (code int, fallBack bool) {
 	client, err := github.ForUser(apiHost, acc.GitHubUser)
 	if err != nil {
 		var notSignedIn *github.NotSignedInError
 		if errors.As(err, &notSignedIn) {
-			a.warnf("gh isn't signed in to %s as %s. Sign in with `gh auth login -h %s` and pick that account, then run this again. Meanwhile, here's how to add the keys by hand.\n", apiHost, acc.GitHubUser, apiHost)
+			a.warnf("%v. Sign in with `gh auth login -h %s` and pick that account, then run this again. Meanwhile, here's how to add the keys by hand.\n", notSignedIn, apiHost)
 			return 0, true
 		}
 		return a.fail(err), false
+	}
+	if client.User != acc.GitHubUser {
+		*spelling = client.User
 	}
 	login, granted, err := client.Info()
 	if err != nil {
 		return a.fail(err), false
 	}
-	if !strings.EqualFold(login, acc.GitHubUser) {
-		return a.fail(fmt.Errorf("gh's token for %s on %s belongs to %s", acc.GitHubUser, apiHost, login)), false
+	if !strings.EqualFold(login, client.User) {
+		return a.fail(fmt.Errorf("gh's token for %s on %s belongs to %s", client.User, apiHost, login)), false
 	}
 
 	var kinds []github.Kind
@@ -111,11 +136,11 @@ func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exporte
 	}
 	if missing := github.MissingScopes(granted, kinds...); len(missing) > 0 {
 		return a.fail(fmt.Errorf("gh's token for %s on %s can't add SSH keys yet. Give it the %s scope with:\n  %s",
-			acc.GitHubUser, apiHost, strings.Join(missing, " and "), refreshCommand(apiHost, acc.GitHubUser, missing))), false
+			client.User, apiHost, strings.Join(missing, " and "), refreshCommand(apiHost, client.User, missing))), false
 	}
 
 	title := keyTitle(acc)
-	where := acc.GitHubUser
+	where := client.User
 	if apiHost != github.DotCom {
 		where += " on " + apiHost
 	}

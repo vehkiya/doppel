@@ -65,6 +65,11 @@ func (a *app) cmdDoctor(args []string) int {
 	if len(positional) != 0 {
 		return a.usageError(doctorUsage)
 	}
+	if fix {
+		if err := a.lockWrites(); err != nil {
+			return a.fail(err)
+		}
+	}
 	list, err := accounts.Load(a.env)
 	if err != nil {
 		return a.fail(err)
@@ -129,21 +134,30 @@ func (a *app) doctorFiles(r *report, list []*accounts.Account, fix bool) {
 		return
 	}
 	defer p.Close()
+	// Save validates the accounts first, so a hand-edited folder that would
+	// break Git's config is reported here rather than written by --fix.
 	var outdated []string
-	if err := store.Stage(a.env, p, list, store.Options{}); err != nil {
+	upToDate := false
+	if err := store.Save(a.env, p, list, store.Options{}); err != nil {
 		r.problem("", "Can't bring doppel's files up to date: %v", err)
 	} else if changes, err := p.Changes(); err != nil {
 		r.problem("", "%v", err)
-	} else if len(changes) > 0 && fix {
-		if _, err := p.Apply(); err != nil {
-			r.problem("", "Couldn't update doppel's files: %v", err)
-		}
-		for _, c := range changes {
-			r.ok("Updated %s", a.env.Shorten(c.Path))
-		}
 	} else {
-		for _, c := range changes {
-			outdated = append(outdated, a.env.Shorten(c.Path))
+		upToDate = len(changes) == 0
+		if len(changes) > 0 && fix {
+			if _, err := p.Apply(); err != nil {
+				r.problem("", "Couldn't update doppel's files: %v", err)
+			} else {
+				for _, c := range changes {
+					r.ok("Updated %s", a.env.Shorten(c.Path))
+				}
+				upToDate = true
+			}
+		}
+		if !upToDate {
+			for _, c := range changes {
+				outdated = append(outdated, a.env.Shorten(c.Path))
+			}
 		}
 	}
 
@@ -161,9 +175,19 @@ func (a *app) doctorFiles(r *report, list []*accounts.Account, fix bool) {
 		r.problem("Move it above doppel's include, or remove it: the accounts set it", "%s sets %s after doppel's include, overriding every account", short, key)
 	}
 
+	// doppel's own Git calls ignore the user's config, so only Git run
+	// as the user can say whether it can read what doppel wrote.
+	if paths.FileExists(a.env.GlobalConfigPath()) {
+		if _, err := git.Run("", "config", "--global", "--includes", "--list"); err != nil {
+			r.problem("Fix the file the error names; until then every Git command fails", "Git can't read your global config: %v", err)
+		} else {
+			r.ok("Git reads your global config and everything it includes")
+		}
+	}
+
 	if len(outdated) > 0 {
 		r.warn("Run `doppel doctor --fix`", "doppel's files don't match the accounts: %s", strings.Join(outdated, ", "))
-	} else if err == nil {
+	} else if upToDate && err == nil {
 		r.ok("doppel's files match the accounts")
 	}
 }

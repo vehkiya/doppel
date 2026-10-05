@@ -60,6 +60,7 @@ func (a *app) updateCheck() func() (string, bool) {
 // warnings, errors) waits for Enter first. quit ends the browser, after
 // doppel updated itself.
 func (a *app) runAction(act tui.Action) (status string, quit bool) {
+	defer a.unlockWrites() // a command that failed early may still hold the lock
 	switch act.Kind {
 	case tui.Upgrade:
 		installed, err := update.Perform(version.Version, a.stdout, false)

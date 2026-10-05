@@ -45,8 +45,26 @@ func New(t *testing.T) *Sandbox {
 			t.Fatal(err)
 		}
 	}
-	return &Sandbox{T: t, Home: home}
+	// gh reads its host and token from GH_* and GITHUB_* variables.
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "GH_") || strings.HasPrefix(name, "GITHUB_") {
+			t.Setenv(name, "")
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	s := &Sandbox{T: t, Home: home}
+	s.FakeCommand("gh", defaultFakeGH)
+	return s
 }
+
+// defaultFakeGH is the gh every sandbox starts with: one that is signed in
+// nowhere, so the real gh, and the developer's real accounts, are never
+// reached. Tests that need a signed-in gh replace it with FakeCommand.
+const defaultFakeGH = `echo "not logged in (fake gh)" >&2
+exit 1`
 
 // Env loads doppel's view of the sandbox's environment.
 func (s *Sandbox) Env() *paths.Env {

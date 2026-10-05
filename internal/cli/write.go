@@ -9,27 +9,73 @@ import (
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
+// lockWrites takes the write lock, unless this command already holds it.
+// It's released when the command ends.
+func (a *app) lockWrites() error {
+	if a.unlock != nil {
+		return nil
+	}
+	release, err := store.Lock(a.env)
+	if err != nil {
+		return err
+	}
+	a.unlock = release
+	return nil
+}
+
+func (a *app) unlockWrites() {
+	if a.unlock != nil {
+		a.unlock()
+		a.unlock = nil
+	}
+}
+
+// loadForWrite loads the accounts a command is about to change and save.
+// A command that can't stop to ask anything takes the write lock first, so
+// commands running at once go one after the other. One that may ask (it has a
+// terminal) leaves the lock to save, so a prompt never keeps other commands
+// waiting; save then fails if the files changed in the meantime.
+func (a *app) loadForWrite(w writeFlags) ([]*accounts.Account, error) {
+	if !a.interactive && !w.dryRun {
+		if err := a.lockWrites(); err != nil {
+			return nil, err
+		}
+	}
+	return accounts.Load(a.env)
+}
+
 // save writes list as the complete set of accounts, first generating any
 // pending keys. With --dry-run it shows what would change instead.
 func (a *app) save(list []*accounts.Account, w writeFlags, done string, pending ...pendingKey) int {
+	return a.saveRemoving(nil, list, w, done, pending...)
+}
+
+// saveRemoving is save for a command that deletes accounts: removed are
+// those accounts, which are no longer in list. No other account is deleted.
+func (a *app) saveRemoving(removed, list []*accounts.Account, w writeFlags, done string, pending ...pendingKey) int {
 	if err := accounts.ValidateAll(a.env, list); err != nil {
 		return a.fail(err)
 	}
-	var opts store.Options
+	opts := store.Options{Removed: removed}
 	if w.dryRun {
 		for _, k := range pending {
 			a.notef("Dry run: would generate the %s %s", k.purpose, a.env.Shorten(k.path))
 		}
 		opts.PublicKey = a.dryRunKeys(pending)
-	} else if err := a.generateKeys(pending); err != nil {
-		return a.fail(err)
+	} else {
+		if err := a.generateKeys(pending); err != nil {
+			return a.fail(err)
+		}
+		if err := a.lockWrites(); err != nil {
+			return a.fail(err)
+		}
 	}
 	p, err := plan.New()
 	if err != nil {
 		return a.fail(err)
 	}
 	defer p.Close()
-	if err := store.Stage(a.env, p, list, opts); err != nil {
+	if err := store.Save(a.env, p, list, opts); err != nil {
 		return a.fail(err)
 	}
 	code := a.finish(p, w, done)

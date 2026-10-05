@@ -15,26 +15,82 @@ import (
 	"github.com/vehkiya/doppel/internal/plan"
 )
 
-// Options adjusts how Stage reads keys.
+// Options adjusts how Save writes accounts.
 type Options struct {
 	// PublicKey reads a signing key's public half. It defaults to reading the
 	// key file; a dry run substitutes placeholders for keys it would generate.
 	PublicKey func(key string) (string, error)
+
+	// Removed lists the accounts the command deletes. Save deletes the file
+	// of no other account, apart from the old file of one that was renamed,
+	// so an account added meanwhile is never swept away.
+	Removed []*accounts.Account
 }
 
-// Stage plans every file change needed for list to be the whole set of
-// accounts: each account file, removal of files whose account is gone,
-// doppel's block in allowed_signers, the generated index, and the include in
-// the global Git config. Changes are staged in that order, so Apply writes
-// the global include last.
-func Stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options) error {
+// Save plans every file change needed for list to be the whole set of
+// accounts: each account file, removal of the files of Options.Removed and of
+// renamed accounts, doppel's block in allowed_signers, the generated index,
+// and the include in the global Git config. Changes are staged in that
+// order, so Apply writes the global include last.
+//
+// It is the only way to stage accounts, so every write is validated first,
+// whether it comes from a command or from `doctor --fix`: a folder that
+// would make Git misread or reject the generated index never reaches a file.
+// It also fails when an account file changed since the command loaded it.
+// Callers hold the write lock (Lock) from before the first load they can't
+// afford to be stale until Apply returns.
+func Save(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options) error {
+	if err := accounts.ValidateAll(env, list); err != nil {
+		return err
+	}
+	if err := checkFresh(env, list, opts.Removed); err != nil {
+		return err
+	}
+	return stage(env, p, list, opts)
+}
+
+// checkFresh fails when an account file isn't as the command loaded it: one
+// was edited or deleted, or one it never saw was added.
+func checkFresh(env *paths.Env, list, removed []*accounts.Account) error {
+	known := map[string]bool{}
+	for _, a := range append(slices.Clone(list), removed...) {
+		if a.File == "" {
+			continue
+		}
+		known[a.File] = true
+		if a.Checksum == "" {
+			continue
+		}
+		sum, err := accounts.FileChecksum(a.File)
+		if err != nil {
+			return err
+		}
+		if sum != a.Checksum {
+			return &plan.StaleError{Path: a.File}
+		}
+	}
+	existing, err := filepath.Glob(filepath.Join(env.AccountsDir(), "*.gitconfig"))
+	if err != nil {
+		return err
+	}
+	for _, path := range existing {
+		if !known[path] && !strings.HasPrefix(filepath.Base(path), ".") {
+			return &plan.StaleError{Path: path}
+		}
+	}
+	return nil
+}
+
+func stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options) error {
 	if opts.PublicKey == nil {
 		opts.PublicKey = defaultPublicKey
 	}
-	keep := map[string]bool{}
+	targets := map[string]bool{}
+	for _, a := range list {
+		targets[env.AccountPath(a.ID)] = true
+	}
 	for _, a := range list {
 		path := env.AccountPath(a.ID)
-		keep[path] = true
 		if a.File != "" && a.File != path {
 			// Renamed: start from the old file so the settings doppel
 			// doesn't manage come along.
@@ -55,13 +111,15 @@ func Stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options)
 		}
 	}
 
-	existing, err := filepath.Glob(filepath.Join(env.AccountsDir(), "*.gitconfig"))
-	if err != nil {
-		return err
+	gone := slices.Clone(opts.Removed)
+	for _, a := range list {
+		if a.File != "" && a.File != env.AccountPath(a.ID) {
+			gone = append(gone, a)
+		}
 	}
-	for _, path := range existing {
-		if !keep[path] && !strings.HasPrefix(filepath.Base(path), ".") {
-			if err := p.Remove(path); err != nil {
+	for _, a := range gone {
+		if a.File != "" && !targets[a.File] {
+			if err := p.Remove(a.File); err != nil {
 				return err
 			}
 		}

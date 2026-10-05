@@ -20,7 +20,7 @@ func (a *app) cmdBind(args []string) int {
 	if len(positional) < 2 {
 		return a.usageError(bindUsage)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -47,7 +47,7 @@ func (a *app) cmdUnbind(args []string) int {
 	if len(positional) == 0 {
 		return a.usageError(unbindUsage)
 	}
-	list, err := accounts.Load(a.env)
+	list, err := a.loadForWrite(w)
 	if err != nil {
 		return a.fail(err)
 	}

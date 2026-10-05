@@ -45,7 +45,9 @@ Before committing, all of the following must pass cleanly:
 ### 2.3 Single write path
 * Every file change goes through a `Plan`: stage, then `Apply`.
 * `Apply` keeps a hidden backup of each file it replaces or removes (`.<name>.doppel.bak`), and writes atomically, preserving the file's mode and any symlink, even a dangling one.
-* `Apply` takes every backup first, writes next, and removes files last, so a failure partway never leaves a folder rule pointing at a missing file.
+* `Apply` takes every backup first, writes next, and removes files last, so a failure partway never leaves a folder rule pointing at a missing file. If a step fails it rolls back what it already did, so a failed command leaves every file as it was. `Apply` also fails with `plan.StaleError` when a file no longer has the content it was staged from.
+* **Stage accounts only through `store.Save`**, which validates them (`accounts.ValidateAll`) and fails when an account file changed since the command loaded it. There is no other exported way, so `doctor --fix` can't write what a command would refuse. Say which accounts you delete (`store.Options.Removed`, or a rename); nothing else is ever deleted.
+* **Take the write lock** (`app.lockWrites`, from `store.Lock`) around the load, save and apply of anything that writes. A command that may prompt takes it only in `save`, never while a prompt is open.
 * Because commands only stage changes, `--dry-run` shows exactly what a real run would write. Never write a file outside a plan.
 * doppel never overwrites or deletes key files.
 
@@ -76,7 +78,7 @@ Keep styling consistent with sshx's palette (`internal/ui/palette.go`):
 ### 2.5 Testing
 * Tests never touch the real home directory, Git config or ssh-agent. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` and `SSH_*` variable that could leak in a developer's own setup or open a passphrase dialog.
 * Make test keys with `Sandbox.Key` (real `ssh-keygen`, so signatures really verify). Never contact a real host: stand in for `ssh` with `Sandbox.FakeSSH`.
-* Never call the real `gh`. Upload tests use the `fakeGH` script, whose state (signed-in users, scopes, keys) lives in files in the sandbox. To test a missing tool, narrow `PATH` with `Sandbox.OnlyCommands`.
+* Never call the real `gh`. `testenv.New` puts a `gh` signed in nowhere first on `PATH` and clears every `GH_*` and `GITHUB_*` variable. Upload tests install the `fakeGH` script instead, whose state (signed-in users, scopes, keys) lives in files in the sandbox. To test a missing tool, narrow `PATH` with `Sandbox.OnlyCommands`.
 * `doctor` must stay read-only without `--fix`: it stages its checks in a plan and only applies the plan with `--fix`.
 * Test wizards by setting `s.tty = true` and scripting `s.stdin` with `script(...)`, one line per prompt (empty for the default). The sandbox runs forms in accessible mode.
 * Test the full-screen wizard's navigation with `formDriver`, which sends keys to the real form and feeds its commands back as a terminal would.

@@ -131,43 +131,131 @@ func (p *Plan) Changes() ([]Change, error) {
 	return changes, nil
 }
 
-// Apply writes every change. It backs up every file it will replace or
-// remove before touching any of them, then writes files in staging order,
-// and removes files last. If something fails partway, what's left over is
-// at worst an extra file, never a rule pointing at a file that's gone.
+// File operations Apply performs, swapped by tests to inject failures.
+var (
+	writeFile  = atomicWrite
+	removeFile = os.Remove
+)
+
+// StaleError means a file changed after the plan read it, so writing the
+// plan would undo whatever changed it.
+type StaleError struct{ Path string }
+
+func (e *StaleError) Error() string {
+	return e.Path + " changed since it was read; run the command again"
+}
+
+// undoStep puts one thing Apply did back. what says, for the error message,
+// how to do it by hand.
+type undoStep struct {
+	what string
+	undo func() error
+}
+
+// Apply writes every change. It first checks that each file still has the
+// content the plan read, then backs up every file it will replace or remove
+// before touching any of them, writes files in staging order, and removes
+// files last.
+//
+// If a step fails, Apply puts back everything it already did, in reverse:
+// files it replaced get their old content, files it created are deleted, and
+// the backups return to how they were. Nothing is left half-done, so the
+// command can simply be run again once the cause is fixed.
 func (p *Plan) Apply() ([]Change, error) {
 	changes, err := p.Changes()
 	if err != nil {
 		return nil, err
 	}
 	for _, c := range changes {
-		if c.Existed {
-			if err := atomicWrite(BackupPath(c.Path), c.Old, 0600); err != nil {
-				return nil, fmt.Errorf("backing up %s: %w", c.Path, err)
+		data, err := os.ReadFile(filepath.Clean(c.Path)) //nolint:gosec // doppel's own and Git config files
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			if c.Existed {
+				return nil, &StaleError{Path: c.Path}
 			}
+		case err != nil:
+			return nil, err
+		case !c.Existed || !bytes.Equal(data, c.Old):
+			return nil, &StaleError{Path: c.Path}
 		}
+	}
+
+	var done []undoStep
+	fail := func(err error) ([]Change, error) { return nil, rollBack(err, done) }
+
+	for _, c := range changes {
+		if !c.Existed {
+			continue
+		}
+		backup := BackupPath(c.Path)
+		previous, rerr := os.ReadFile(filepath.Clean(backup)) //nolint:gosec // doppel's own hidden backup
+		if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			return fail(fmt.Errorf("backing up %s: %w", c.Path, rerr))
+		}
+		hadBackup := rerr == nil
+		if err := writeFile(backup, c.Old, 0600); err != nil {
+			return fail(fmt.Errorf("backing up %s: %w", c.Path, err))
+		}
+		done = append(done, undoStep{what: "restore " + backup, undo: func() error {
+			if hadBackup {
+				return writeFile(backup, previous, 0600)
+			}
+			return removeFile(backup)
+		}})
 	}
 	for _, c := range changes {
 		if !c.Exists {
 			continue
 		}
-		mode := os.FileMode(0644)
-		if info, err := os.Stat(c.Path); err == nil {
-			mode = info.Mode().Perm()
+		mode := fileMode(c.Path)
+		if err := writeFile(c.Path, c.New, mode); err != nil {
+			return fail(err)
 		}
-		if err := atomicWrite(c.Path, c.New, mode); err != nil {
-			return nil, err
+		if c.Existed {
+			done = append(done, undoStep{what: "restore " + c.Path + " from " + BackupPath(c.Path), undo: func() error { return writeFile(c.Path, c.Old, mode) }})
+		} else {
+			done = append(done, undoStep{what: "delete " + c.Path, undo: func() error { return removeFile(symlinkTarget(c.Path)) }})
 		}
 	}
 	for _, c := range changes {
 		if c.Exists {
 			continue
 		}
-		if err := os.Remove(c.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
+		mode := fileMode(c.Path)
+		if err := removeFile(c.Path); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return fail(err)
 		}
+		done = append(done, undoStep{what: "restore " + c.Path + " from " + BackupPath(c.Path), undo: func() error { return writeFile(c.Path, c.Old, mode) }})
 	}
 	return changes, nil
+}
+
+// rollBack undoes done, newest first, and says in the error what it did.
+func rollBack(cause error, done []undoStep) error {
+	var stuck []string
+	for i := len(done) - 1; i >= 0; i-- {
+		if err := done[i].undo(); err != nil {
+			stuck = append(stuck, fmt.Sprintf("%s (%v)", done[i].what, err))
+		}
+	}
+	switch {
+	case len(stuck) > 0:
+		return fmt.Errorf("%w; doppel couldn't put everything back, so finish by hand: %s", cause, strings.Join(stuck, "; "))
+	case len(done) > 0:
+		return fmt.Errorf("%w; doppel put back every file it had already written, so nothing changed", cause)
+	}
+	return fmt.Errorf("%w; nothing was changed", cause)
+}
+
+// fileMode is the permission bits of path, or 0644 for a file to be created.
+func fileMode(path string) os.FileMode {
+	if info, err := os.Stat(path); err == nil {
+		return info.Mode().Perm()
+	}
+	return 0644
 }
 
 // BackupPath is where the previous version of a file is kept: a hidden file
