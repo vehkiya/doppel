@@ -19,15 +19,12 @@ func newAccount(id string) *accounts.Account {
 // saveAll writes list as the whole set of accounts and applies it.
 func saveAll(t *testing.T, s *testenv.Sandbox, list []*accounts.Account, opts Options) error {
 	t.Helper()
-	p, err := plan.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := plan.New(s.Env().StagingDir())
 	defer p.Close()
 	if err := Save(s.Env(), p, list, opts); err != nil {
 		return err
 	}
-	_, err = p.Apply()
+	_, err := p.Apply()
 	return err
 }
 

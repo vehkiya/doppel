@@ -8,10 +8,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vehkiya/doppel/internal/atomicfile"
 )
 
 const (
@@ -122,7 +122,7 @@ func writeCache(latest string) {
 	if err != nil {
 		return
 	}
-	_ = writeFileAtomic(path, data, 0600)
+	_ = atomicfile.Write(path, data, 0600)
 }
 
 // LatestCached is Latest through a cache of the last check, for the
@@ -370,51 +370,9 @@ func currentExecutable() (string, error) {
 // running binary can be replaced on Linux and macOS, and the next run uses
 // the new one.
 func replaceExecutable(path string, binary []byte) error {
-	err := writeFileAtomic(path, binary, 0755)
+	err := atomicfile.Write(path, binary, 0755)
 	if errors.Is(err, os.ErrPermission) {
 		return fmt.Errorf("no permission to replace %s; update with the tool that installed it, or run `sudo doppel update`", path)
 	}
 	return err
-}
-
-// writeFileAtomic writes data through a temporary file in the same folder and
-// a rename, so the file is never half-written.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	suffix := make([]byte, 4)
-	if _, err := rand.Read(suffix); err != nil {
-		return err
-	}
-	tmp := filepath.Join(dir, ".tmp."+filepath.Base(path)+"."+hex.EncodeToString(suffix))
-	f, err := os.OpenFile(filepath.Clean(tmp), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm) //nolint:gosec // a temp file next to the target
-	if err != nil {
-		return err
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-		}
-	}()
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, perm); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	ok = true
-	return nil
 }

@@ -30,10 +30,7 @@ func (a *app) cmdUninstall(args []string) int {
 			return a.fail(err)
 		}
 	}
-	p, err := plan.New()
-	if err != nil {
-		return a.fail(err)
-	}
+	p := plan.New(a.env.StagingDir())
 	defer p.Close()
 	removedInclude, err := store.RemoveInclude(a.env, p)
 	if err != nil {

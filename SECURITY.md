@@ -22,7 +22,8 @@ I aim to acknowledge reports within 48 hours, and will keep you posted until a f
 ## How doppel handles your files
 
 - **Few changes outside its folder:** doppel changes only one block in your global Git config (its include) and one marked block in your `allowed_signers` file. Everything else lives in `~/.config/doppel`.
-- **Safe writes:** every write is atomic (a temporary file, then a rename), keeps symlinks and the file's mode, and keeps a hidden `.<name>.doppel.bak` backup of the previous version.
+- **Safe writes:** every write is atomic (a temporary file, then a rename), keeps symlinks and the file's mode, and keeps hidden backups of the last three versions (`.<name>.doppel.bak`, then `.bak.1` and `.bak.2`). If any step fails, doppel puts back what it already wrote.
+- **No copies in shared places:** changes are staged in `~/.config/doppel/.staging` (private to you), never in the shared temp directory, because a copy of your global Git config can hold secrets such as tokens. The copies are deleted when the command ends, and leftovers from a killed command are deleted by the next one.
 - **Keys:** doppel never overwrites or deletes key files. When it generates a key, `ssh-keygen` asks for the passphrase; doppel never sees it.
 - **Updates:** `doppel update` only installs a release whose `checksums.txt` carries a valid Ed25519 signature (`checksums.txt.sig`) from a key built into doppel, and whose archive matches that file's SHA-256 checksum. Anything else is refused. The browser's update notice checks GitHub at most every 6 hours; set `DOPPEL_NO_UPDATE_CHECK=1` to turn it off.
 - **Uploads:** `doppel upload` only talks to GitHub through `gh`, using the token `gh` keeps for the account's own GitHub user. It ignores `GH_TOKEN`, `GITHUB_TOKEN` and `GH_HOST` from the environment, so they can't send keys to another account or host.
@@ -58,5 +59,6 @@ The release workflow refuses to sign with a key that isn't listed. The private k
 
 ## Good practice
 
+- Treat account files like `~/.gitconfig`: Git reads them as config, so a setting in one (for example `core.sshCommand` or `core.fsmonitor`) runs commands in every repo that account covers. If you sync `~/.config/doppel/accounts` between machines, only sync from places you trust.
 - Protect private keys with a passphrase, and use an agent (or a hardware key) so you type it once.
 - Give each account a key of its own. `doppel doctor` flags accounts that share one on the same host, since one would log in as the other.

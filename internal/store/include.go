@@ -32,12 +32,12 @@ func IncludesIndex(env *paths.Env, configPath string) (bool, error) {
 	return false, nil
 }
 
-// EnsureInclude makes sure the global Git config includes doppel's index
+// ensureInclude makes sure the global Git config includes doppel's index
 // once, at the end of the file Git reads last. An include left in another
 // global file, such as ~/.config/git/config from before ~/.gitconfig
 // existed, is moved. The block is appended as text: `git config --add`
 // would put it inside an existing [include] section, which may not be last.
-func EnsureInclude(env *paths.Env, p *plan.Plan) error {
+func ensureInclude(env *paths.Env, p *plan.Plan) error {
 	path := env.GlobalConfigPath()
 	for _, other := range env.GlobalConfigFiles() {
 		if other == path {
@@ -185,19 +185,7 @@ func Overrides(env *paths.Env, managed []string) (path string, found bool, overr
 	}
 	// Read what follows the include with Git. Lines left over from the
 	// [include] section get a placeholder section so Git can parse them.
-	tail, err := os.CreateTemp("", "doppel-tail-*.gitconfig")
-	if err != nil {
-		return path, true, nil, err
-	}
-	defer func() { _ = os.Remove(tail.Name()) }()
-	_, err = tail.WriteString("[doppel-tail]\n" + strings.Join(lines[last+1:], "\n"))
-	if cerr := tail.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return path, true, nil, err
-	}
-	values, err := git.ReadConfigFile(tail.Name())
+	values, err := git.ReadConfig([]byte("[doppel-tail]\n" + strings.Join(lines[last+1:], "\n")))
 	if err != nil {
 		return path, true, nil, err
 	}

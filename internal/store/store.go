@@ -129,10 +129,10 @@ func stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options)
 	if err != nil {
 		return err
 	}
-	if err := p.SetContent(env.IndexPath(), RenderIndex(env, list, signers)); err != nil {
+	if err := p.SetContent(env.IndexPath(), renderIndex(env, list, signers)); err != nil {
 		return err
 	}
-	return EnsureInclude(env, p)
+	return ensureInclude(env, p)
 }
 
 // reconcile brings the managed keys in a Git config file to the given

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // snapshot lists every file under dir, hidden backups included, with its
@@ -43,6 +44,14 @@ func snapshot(t *testing.T, dir string) map[string]string {
 	return got
 }
 
+// newPlan starts a plan staging outside the directory a test snapshots.
+func newPlan(t *testing.T) *Plan {
+	t.Helper()
+	p := New(filepath.Join(t.TempDir(), "staging"))
+	t.Cleanup(p.Close)
+	return p
+}
+
 func write(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -55,7 +64,8 @@ func write(t *testing.T, path, content string) {
 
 // mixedPlan changes four files in one plan: one replaced (with an older
 // backup already there), one replaced with no backup yet, one created, and
-// one removed. Applying it takes 3 backups, 3 writes and 1 removal.
+// one removed. Applying it takes 4 backup writes (the older backup moves
+// down a generation), 3 file writes and 1 removal.
 func mixedPlan(t *testing.T) (dir string, p *Plan) {
 	t.Helper()
 	dir = t.TempDir()
@@ -64,11 +74,7 @@ func mixedPlan(t *testing.T) (dir string, p *Plan) {
 	write(t, filepath.Join(dir, "b.conf"), "b old\n")
 	write(t, filepath.Join(dir, "gone.conf"), "gone old\n")
 
-	p, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(p.Close)
+	p = newPlan(t)
 	// In this order, which is the order Apply writes them in.
 	for _, name := range []string{"a", "b", "c"} {
 		if err := p.SetContent(filepath.Join(dir, name+".conf"), []byte(name+" new\n")); err != nil {
@@ -127,11 +133,11 @@ func TestApplyWritesBacksUpAndRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != 4 || *writes != 6 || *removals != 1 {
-		t.Fatalf("%d changes, %d writes, %d removals; want 4, 6, 1", len(changes), *writes, *removals)
+	if len(changes) != 4 || *writes != 7 || *removals != 1 {
+		t.Fatalf("%d changes, %d writes, %d removals; want 4, 7, 1", len(changes), *writes, *removals)
 	}
 	want := map[string]string{
-		"a.conf": "a new\n", ".a.conf.doppel.bak": "a old\n",
+		"a.conf": "a new\n", ".a.conf.doppel.bak": "a old\n", ".a.conf.doppel.bak.1": "a older\n",
 		"b.conf": "b new\n", ".b.conf.doppel.bak": "b old\n",
 		"c.conf":                "c new\n",
 		".gone.conf.doppel.bak": "gone old\n",
@@ -147,7 +153,7 @@ func TestApplyLeavesNothingBehindWhenAnyStepFails(t *testing.T) {
 		fail  func(t *testing.T, n int) *int
 		calls int
 	}{
-		{"write", func(t *testing.T, n int) *int { return failWrites(t, n, false) }, 6}, // 3 backups, then 3 files
+		{"write", func(t *testing.T, n int) *int { return failWrites(t, n, false) }, 7}, // 4 backup writes, then 3 files
 		{"removal", func(t *testing.T, n int) *int { return failRemovals(t, n, false) }, 1},
 	}
 	for _, step := range steps {
@@ -179,11 +185,7 @@ func TestApplyRollbackKeepsASymlinkAndItsTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(dir, "b.conf"), "b old\n")
-	p, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.Close()
+	p := newPlan(t)
 	for _, path := range []string{"link.conf", "b.conf"} { // the link is written first
 		if err := p.SetContent(filepath.Join(dir, path), []byte("new\n")); err != nil {
 			t.Fatal(err)
@@ -202,7 +204,7 @@ func TestApplyRollbackKeepsASymlinkAndItsTarget(t *testing.T) {
 
 func TestApplySaysWhatItCouldNotPutBack(t *testing.T) {
 	dir, p := mixedPlan(t)
-	failWrites(t, 5, true) // the second file fails, and so does every restore after it
+	failWrites(t, 6, true) // the second file fails, and so does every restore after it
 
 	_, err := p.Apply()
 	if !errors.Is(err, errInjected) {
@@ -247,5 +249,111 @@ func TestApplyRefusesFilesChangedSinceTheyWereRead(t *testing.T) {
 				t.Errorf("Apply wrote files although one was stale:\n got %q\nwant %q", got, before)
 			}
 		})
+	}
+}
+
+func TestApplyKeepsThreeBackups(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.conf")
+	write(t, path, "v1\n")
+	for _, next := range []string{"v2\n", "v3\n", "v4\n", "v5\n"} {
+		p := newPlan(t)
+		if err := p.SetContent(path, []byte(next)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Apply(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := map[string]string{
+		"a.conf":               "v5\n",
+		".a.conf.doppel.bak":   "v4\n",
+		".a.conf.doppel.bak.1": "v3\n",
+		".a.conf.doppel.bak.2": "v2\n",
+	}
+	if got := snapshot(t, dir); !reflect.DeepEqual(got, want) {
+		t.Errorf("files after four changes:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestApplyRollbackRestoresEveryBackupGeneration(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a.conf"), "v3\n")
+	write(t, filepath.Join(dir, ".a.conf.doppel.bak"), "v2\n")
+	write(t, filepath.Join(dir, ".a.conf.doppel.bak.1"), "v1\n")
+	write(t, filepath.Join(dir, ".a.conf.doppel.bak.2"), "v0\n")
+	p := newPlan(t)
+	if err := p.SetContent(filepath.Join(dir, "a.conf"), []byte("v4\n")); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dir)
+	failWrites(t, 4, false) // after all three generations moved, writing a.conf fails
+
+	if _, err := p.Apply(); !errors.Is(err, errInjected) {
+		t.Fatalf("Apply error = %v", err)
+	}
+	if got := snapshot(t, dir); !reflect.DeepEqual(got, before) {
+		t.Errorf("files after rollback:\n got %q\nwant %q", got, before)
+	}
+}
+
+func TestStagingClearsLeftovers(t *testing.T) {
+	staging := filepath.Join(t.TempDir(), "staging")
+	old := filepath.Join(staging, "plan-killed")
+	recent := filepath.Join(staging, "plan-running")
+	other := filepath.Join(staging, "not-a-plan")
+	for _, d := range []string{old, recent, other} {
+		write(t, filepath.Join(d, "0-gitconfig"), "secret\n")
+	}
+	long := time.Now().Add(-2 * staleAfter)
+	for _, d := range []string{old, other} {
+		if err := os.Chtimes(d, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := New(staging)
+	staged, err := p.Stage(filepath.Join(t.TempDir(), "a.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a plan directory left by a killed command is still there (err %v)", err)
+	}
+	for _, d := range []string{recent, other} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s was removed: %v", filepath.Base(d), err)
+		}
+	}
+	if !strings.HasPrefix(staged, staging+string(filepath.Separator)) {
+		t.Errorf("plan stages %s, outside %s", staged, staging)
+	}
+	p.Close()
+	if _, err := os.Stat(p.dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Close left the plan's copies behind (err %v)", err)
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Errorf("Close removed a staging directory it didn't create: %v", err)
+	}
+}
+
+func TestStagingDirectoryIsPrivateAndGoesAwayWithThePlan(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "doppel", ".staging")
+	p := New(staging)
+	if _, err := os.Stat(staging); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("New made the staging directory before anything was staged (err %v)", err)
+	}
+	if err := p.SetContent(filepath.Join(root, "a.conf"), []byte("a\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{staging, filepath.Dir(staging)} {
+		if info, err := os.Stat(d); err != nil || info.Mode().Perm() != 0700 {
+			t.Errorf("%s: mode %v, err %v; want 0700", d, info.Mode().Perm(), err)
+		}
+	}
+	p.Close()
+	if _, err := os.Stat(filepath.Join(root, "doppel")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Close left the directories it made (err %v)", err)
 	}
 }

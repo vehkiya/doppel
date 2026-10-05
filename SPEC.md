@@ -55,7 +55,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - **Folders**
 - **R1.3** Deleting an account removes its account file, its folders and its `allowed_signers` entry. It never deletes key files. If the account was the default, doppel asks in a terminal which account becomes the new default, or none. Without a terminal it leaves none and says how to pick one.
 - **R1.4** Renaming an account (changing its ID) keeps everything else unchanged.
-- **R1.5 First run.** If the global Git config already has `user.name` and `user.email`, the add wizard for the first account offers to start from them.
+- **R1.5 First run.** If the global Git config already has `user.name` and `user.email`, the add wizard for the first account offers to start from them. They may be set in a file the global config includes, as dotfile setups often do; doppel's own files are left out.
   - It also brings in any SSH signing setup (`gpg.format = ssh`, `user.signingkey`, `commit.gpgsign`, `tag.gpgsign`) and an auth key named with `-i` in `core.sshCommand`.
   - Every value can still be changed before saving.
   - The global settings stay where they are; doppel's include overrides them.
@@ -99,7 +99,8 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R4.1** Choice: none, the same key as the auth key, or a separate key (existing, custom path, or generated as `~/.ssh/id_ed25519_<account>_signing`).
 - **R4.2** Sets `gpg.format = ssh`, `user.signingkey = <key>.pub`, `commit.gpgsign` and `tag.gpgsign`. With no signing key, both `gpgsign` settings are explicitly `false`.
 - **R4.3** `allowed_signers` has one entry per account (`<email> namespaces="git" <public key>`), kept inside a marked block that doppel owns. Entries outside the block, such as teammates' keys, are never touched. Changing an account's email or signing key updates its entry.
-- **R4.4** Uses the file in `gpg.ssh.allowedSignersFile` if one is set in the global config files themselves. Otherwise it uses `~/.ssh/allowed_signers` and sets that option in the generated index.
+- **R4.4** Uses the file in `gpg.ssh.allowedSignersFile` if the user set one in the global config, or in a file it includes (`[include]`, not `[includeIf]`). Otherwise it uses `~/.ssh/allowed_signers` and sets that option in the generated index.
+  - doppel follows the includes itself, letting Git parse each file, so it can skip its own: the value the index sets isn't mistaken for the user's, and a damaged index can't stop doppel from rewriting it.
 - **R4.4a** If a signing key's public key can't be read when saving, doppel stops and names the fix (`doppel edit <id> --signing-key <key>` or `--no-signing`), rather than silently dropping that key from `allowed_signers`.
 - **R4.5** Signing check: sign and verify a test message with `ssh-keygen -Y sign` and `ssh-keygen -Y verify`, against the same `allowed_signers` file Git uses. `doppel test` runs it.
 
@@ -134,7 +135,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - the account in effect, and the folder rule (or default) that selected it
   - the effective name, email, auth key and signing key, with whether signing is on
   - the login check result for the repo's remote host
-- **R6.2** It asks Git which account applies (each account file carries `doppel.account`), so the result always matches what Git will actually do. It never re-implements folder matching.
+- **R6.2** It asks Git which account applies (each account file carries `doppel.account`), so the result always matches what Git will actually do. Where doppel has to match folders itself (R6.4, and to name the rule that applied), it uses the same ordered rules the index is generated from (`accounts.FolderRules` and `accounts.MatchFolder`), so the two can't disagree.
 - **R6.3** It warns when a value in effect doesn't come from doppel, for example a `--local` override or a global setting placed after doppel's include. It shows where each value comes from, using `git config --show-origin`.
 - **R6.4** Outside any repo, it shows which account a repo created there would get. Git can only answer this for an existing repo, so here doppel applies the same folder rules itself.
   - This also covers a path that doesn't exist yet, such as a clone target.
@@ -180,7 +181,8 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 - **R8.1a** The include goes in the global file Git reads last.
   - If it's found in another global file, doppel moves it. For example, `~/.config/git/config` may hold the include from before `~/.gitconfig` existed.
   - With `GIT_CONFIG_GLOBAL` set, that file is used exactly as Git uses it, without expanding `~`.
-- **R8.2** Every write is atomic (a temporary file in the same directory, then a rename), preserves the file's mode and symlinks (including a dangling symlink, whose target is created), and keeps a hidden backup of the previous version alongside it (`.gitconfig.doppel.bak`), like sshx.
+- **R8.2** Every write is atomic (a temporary file in the same directory, then a rename), preserves the file's mode and symlinks (including a dangling symlink, whose target is created), and keeps hidden backups of the last three versions alongside it, like sshx: `.gitconfig.doppel.bak` is the newest, then `.gitconfig.doppel.bak.1` and `.gitconfig.doppel.bak.2`.
+  - Changes are staged as copies in `~/.config/doppel/.staging` (private, 0700) before they're applied, not in the shared temp directory, since a copy of the global config can hold secrets. The copies are deleted when the command ends, and a command that was killed has its leftovers deleted by a later one.
   - A command takes all its backups before replacing any file, writes next, and removes files last, so a folder rule never points at a missing account file.
   - **A failed write is rolled back.** If any step fails, doppel puts back what it already did: replaced files get their old content, created files are deleted, and the backups return to how they were. The error says so, or, if a restore failed too, lists what to put back by hand. After a failure every file is as it was, and running the command again works once the cause (such as a read-only global config) is fixed.
 - **R8.2a** Accounts reach disk only through `store.Save`, which validates first (R2.5, one default, unique IDs, each folder bound once) and is used by every command and by `doctor --fix`.
@@ -238,11 +240,15 @@ doppel default [<id> | --none]           Show or set the default account
 doppel whoami [path] [--offline]         Show which account applies here, and why
 doppel test [<id>]                       Log in to each host and sign a test message
 doppel doctor [--fix]                    Check every account for problems; --fix brings doppel's files up to date
-doppel export <id> [--auth|--signing]    Print and copy a public key, with host instructions
+doppel export <id> [--auth|--signing] [--no-copy]
+                                         Print and copy a public key, with host instructions
 doppel upload <id> [--auth|--signing]    Upload keys to GitHub with gh
 doppel update [--check] [--force]        Install the latest signed release (--check only looks)
 doppel uninstall                         Remove doppel's changes to your Git and SSH files
-doppel version
+doppel version                           (also -v, --version)
+doppel help                              (also -h, --help)
+
+Aliases: list (ls), remove and delete (rm), upgrade (update).
 
 Flags for add and edit:
   --name, --email, --host (repeatable), --github-user,
@@ -265,6 +271,8 @@ Paths follow `XDG_CONFIG_HOME`:
 ~/.gitconfig                                  + one include block at the end (R8.1)
 ~/.config/doppel/index.gitconfig              generated: default account, then folder rules
 ~/.config/doppel/accounts/<id>.gitconfig      one per account (source of truth)
+~/.config/doppel/.lock                        the write lock (R8.2b)
+~/.config/doppel/.staging/                    working copies while a command runs (R8.2)
 ~/.ssh/allowed_signers                        + one marked block (R4.3)
 ```
 
@@ -349,26 +357,27 @@ Every account file sets every setting doppel manages, including a "reset" value 
   ```
   main.go          calls cli.Run
   internal/
-    cli/       commands, flags, prompts, whoami, the wizards, and the loop around the browser
-    tui/       the account browser (picks an action; cli carries it out)
-    accounts/  the Account model, its managed settings, loading and validation
-    store/     writing accounts: validation, account files, the generated index, the global include, the write lock
-    plan/      staged writes with backups, atomic replacement and rollback (what --dry-run previews)
-    paths/     where files live; normalizing and matching folders
-    git/       running git; reading and writing Git config files through it
-    keys/      reading, generating and checking SSH keys; the login and signing checks
-    ui/        palette, styles and diff rendering
-    version/   build version
-    github/    adding keys to GitHub through gh
-    update/    self-update: checking for releases, verifying and installing them
-    testenv/   a sandboxed home directory and Git environment for tests
+    cli/        commands, flags, prompts, whoami, the wizards, and the loop around the browser
+    tui/        the account browser (picks an action; cli carries it out)
+    accounts/   the Account model, its managed settings, loading and validation; the folder rules and which one applies
+    store/      writing accounts: validation, account files, the generated index, the global include, the write lock
+    plan/       staged writes with backups and rollback (what --dry-run previews)
+    atomicfile/ replacing a file atomically (plan and update)
+    paths/      where files live; normalizing folders and comparing paths
+    git/        running git; reading and writing Git config files through it
+    keys/       reading, generating and checking SSH keys; the login and signing checks
+    ui/         palette, styles and diff rendering
+    version/    build version
+    github/     adding keys to GitHub through gh
+    update/     self-update: checking for releases, verifying and installing them
+    testenv/    a sandboxed home directory and Git environment for tests
   ```
 - The palette, badges and Huh theme are copied from sshx. The quality checks follow sshx's `AGENTS.md`: `gofmt -s`, `go test -race`, `golangci-lint`, a tidy `go.mod`. A doppel `AGENTS.md` adds the rules from §6.2 to §6.4.
 
 ### 6.7 Testing
 
 - Every test runs in a sandbox: a temporary `HOME`, `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL`, with `GIT_CONFIG_NOSYSTEM=1`.
-- Fake `ssh`, `ssh-keygen` (where real key generation isn't needed) and `gh` executables on `PATH` record calls and return canned output. Every sandbox starts with a `gh` that is signed in nowhere, and with the `GH_*` and `GITHUB_*` variables cleared, so the real `gh` is never run; a test that needs a signed-in `gh` installs its own.
+- Fake `ssh` and `gh` executables on `PATH` record calls and return canned output. `ssh-keygen` is the real one, so generated keys, fingerprints and signatures are real and `git log --show-signature` really verifies. Every sandbox starts with a `gh` that is signed in nowhere, and with the `GH_*` and `GITHUB_*` variables cleared, so the real `gh` is never run; a test that needs a signed-in `gh` installs its own.
 - Failure-injection tests cover `plan` (a failure at every write, backup and removal step, and a failed rollback), stale content, and `doctor --fix` with every kind of bad folder.
 - Wizard tests run both ways: through the line-by-line accessible prompts, and through the single form with scripted keystrokes (hidden pages, choices that follow earlier answers, going back).
 - Integration tests run real `git` against sandboxed repos:
@@ -377,7 +386,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
   - worktrees
   - leak-proofing between the default and folder accounts
   - anything placed after the include block in the global config
-- Table tests cover path normalization and rule ordering. The generated files are compared against saved expected output.
+- Table tests cover path normalization, rule ordering and matching. Generated files are compared with the expected text, written inline in the test.
 - CI runs on Linux and macOS (macOS for `gitdir/i:` and its case-insensitive filesystem), and on Linux in an Ubuntu 22.04 container, whose Git 2.34.1 is the minimum doppel supports.
 
 ### 6.8 Distribution

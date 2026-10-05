@@ -19,8 +19,8 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
-* Export only what another package needs. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves apart from `atomicfile`, which `plan` and `update` share; `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Export only what another package needs. The end-to-end tests in `cli` count as another package: they use `store`'s include helpers to check the global config. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
 * doppel is a single static binary: the Go standard library plus the Charm libraries (`bubbletea`, `bubbles`, `huh`, `lipgloss`). No CGO.
@@ -28,6 +28,7 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.2 Git config integrity
 * **Git is the authority on its config format.** Read and write Git config through `git config --file` (`git.ReadConfigFile`, `git.ConfigFile`, and `reconcile` in `store`). The only text doppel writes itself is the generated index and the include block, which it fully controls.
+* **Read the user's settings with their includes** (`git.ReadConfigFileIncludes`), skipping doppel's own files (`Env.InDoppelDir`): dotfile setups often keep `user.*` or `gpg.ssh.allowedSignersFile` in an included file. Git still parses every file; doppel only follows the `include.path` values, so a damaged index can't block the read.
 * **doppel's own Git calls ignore the user's config.**
   * Calls that touch a single named file go through `git.RunAlone`, which switches the global and system config off. A broken user config can then never stop doppel from repairing its files.
   * Use `git.Run` only where the user's config is the point, such as `whoami` and `rev-parse`.
@@ -38,13 +39,14 @@ Before committing, all of the following must pass cleanly:
   * doppel appends its include block to the end of the global file Git reads last, as text: `git config --add` would put it inside an existing `[include]` section.
   * An include found in another global file is moved.
   * When removing the block, check whether other keys share its section: Git adds new `include.path` lines to the last `[include]` section, which is doppel's.
-* **Folder rules go from broad to specific** (`store.RenderIndex`), because Git lets the last match win.
+* **Folder rules go from broad to specific** (`accounts.FolderRules`), because Git lets the last match win. The index and `whoami` both use that one list (`accounts.MatchFolder` picks the rule as Git would), so they can't disagree.
 * **Folders are stored by their real path**, `~/`-shortened and ending in `/` (`Env.NormalizeFolder`). Git matches repos by their real path, and the trailing `/` stops `~/projects/work` from matching `~/projects/workshop`.
 * **Ask Git which account applies** (`doppel.account`). Only `whoami` applies the folder rules itself, and only where Git can't answer, because the repo doesn't exist yet: a clone target, or a new repo inside a folder that belongs to an enclosing repo.
 
 ### 2.3 Single write path
 * Every file change goes through a `Plan`: stage, then `Apply`.
-* `Apply` keeps a hidden backup of each file it replaces or removes (`.<name>.doppel.bak`), and writes atomically, preserving the file's mode and any symlink, even a dangling one.
+* `Apply` keeps hidden backups of the last three versions of each file it replaces or removes (`.<name>.doppel.bak`, `.bak.1`, `.bak.2`), and writes atomically, preserving the file's mode and any symlink, even a dangling one.
+* A plan stages its working copies in `~/.config/doppel/.staging` (`Env.StagingDir`), never the shared temp directory: they can hold secrets from the global config. Don't write other temporary copies of user config; pass text to Git on stdin instead (`git.ReadConfig`).
 * `Apply` takes every backup first, writes next, and removes files last, so a failure partway never leaves a folder rule pointing at a missing file. If a step fails it rolls back what it already did, so a failed command leaves every file as it was. `Apply` also fails with `plan.StaleError` when a file no longer has the content it was staged from.
 * **Stage accounts only through `store.Save`**, which validates them (`accounts.ValidateAll`) and fails when an account file changed since the command loaded it. There is no other exported way, so `doctor --fix` can't write what a command would refuse. Say which accounts you delete (`store.Options.Removed`, or a rename); nothing else is ever deleted.
 * **Take the write lock** (`app.lockWrites`, from `store.Lock`) around the load, save and apply of anything that writes. A command that may prompt takes it only in `save`, never while a prompt is open.
