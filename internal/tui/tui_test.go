@@ -223,3 +223,47 @@ func runAll(cmd tea.Cmd) []tea.Msg {
 		return []tea.Msg{msg}
 	}
 }
+
+func TestKeyDetailsLoadAfterTheBrowserShows(t *testing.T) {
+	env := &paths.Env{Home: "/home/jane", ConfigDir: "/home/jane/.config"}
+	loaded := false
+	load := func() map[string]KeyInfo {
+		loaded = true
+		return map[string]KeyInfo{"work": {Auth: []string{"no passphrase"}}}
+	}
+	var m tea.Model = New(Options{Env: env, Accounts: testAccounts(), LoadKeyInfo: load, Selected: "work"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if loaded {
+		t.Fatal("key details were loaded before the browser showed")
+	}
+	view := m.View()
+	if !strings.Contains(view, "checking…") || strings.Contains(view, "no passphrase") {
+		t.Errorf("before the details arrive:\n%s", view)
+	}
+
+	// Init's commands run in the background; feed their messages back.
+	var msgs []tea.Msg
+	collect(m.Init(), &msgs)
+	for _, msg := range msgs {
+		m, _ = m.Update(msg)
+	}
+	view = m.View()
+	if !strings.Contains(view, "no passphrase") || strings.Contains(view, "checking…") {
+		t.Errorf("after the details arrive:\n%s", view)
+	}
+}
+
+// collect runs cmd and any batch inside it, gathering the messages they send.
+func collect(cmd tea.Cmd, msgs *[]tea.Msg) {
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			collect(c, msgs)
+		}
+	default:
+		*msgs = append(*msgs, msg)
+	}
+}

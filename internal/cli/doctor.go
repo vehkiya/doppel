@@ -253,7 +253,7 @@ func (a *app) doctorAccount(r *report, acc *accounts.Account, list []*accounts.A
 			plural(len(repos), "repo"), map[bool]string{true: "fetches", false: "fetch"}[len(repos) == 1], strings.Join(shown, ", "))
 	}
 
-	if slices.ContainsFunc(acc.Hosts, isGitHub) && acc.GitHubUser == "" {
+	if slices.ContainsFunc(acc.Hosts, a.isGitHub) && acc.GitHubUser == "" {
 		r.note("Set its GitHub user (doppel edit %s --github-user <user>) so test can check logins and upload can add keys", acc.ID)
 	}
 }

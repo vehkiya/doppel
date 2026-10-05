@@ -12,8 +12,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/vehkiya/doppel/internal/proc"
 )
 
 // DotCom is GitHub's own host, which GitHub Enterprise Cloud shares.
@@ -36,7 +40,8 @@ func knownHost(host string) (apiHost string, ok bool) {
 // APIHost tells whether host is GitHub, and which host gh talks to for it.
 // Beyond the names knownHost recognizes, a host gh is signed in to counts:
 // gh only signs in to GitHub, so that's how GitHub Enterprise Server is
-// found. The check is local; nothing connects.
+// found. It asks `gh auth status`, which never hands over a token, and
+// nothing connects. Each call may run gh, so callers remember the answer.
 func APIHost(host string) (string, bool) {
 	if api, ok := knownHost(host); ok {
 		return api, true
@@ -44,11 +49,19 @@ func APIHost(host string) (string, bool) {
 	if !Available() {
 		return "", false
 	}
-	out, err := run("", "", "auth", "token", "--hostname", host)
-	if err != nil || strings.TrimSpace(out) == "" {
+	h := strings.ToLower(host)
+	if accounts, err := Accounts(h); err == nil {
+		if len(accounts) == 0 {
+			return "", false
+		}
+		return h, true
+	}
+	// A gh too old for `auth status --json` exits with an error when it
+	// isn't signed in to the host.
+	if _, err := run(h, "", "auth", "status", "--hostname", h); err != nil {
 		return "", false
 	}
-	return strings.ToLower(host), true
+	return h, true
 }
 
 // Kind is how GitHub files a key.
@@ -144,11 +157,41 @@ type Client struct {
 	token string
 }
 
+// MinVersion is the oldest gh that can hand over the token of an account
+// other than the active one (`gh auth token --user`).
+const MinVersion = "2.40"
+
+// TooOldError means the installed gh can't pick an account's token.
+type TooOldError struct{ Have string }
+
+func (e *TooOldError) Error() string {
+	return fmt.Sprintf("doppel needs gh %s or newer to use the account's own token, and this gh is %s; update gh", MinVersion, e.Have)
+}
+
+var ghVersion = regexp.MustCompile(`gh version (\d+)\.(\d+)\.(\d+)`)
+
+// version returns the installed gh's version, such as "2.40.1", and whether
+// it's new enough. A version gh doesn't report counts as new enough: gh will
+// say so itself if it isn't.
+func version() (string, bool) {
+	out, err := run("", "", "--version")
+	m := ghVersion.FindStringSubmatch(out)
+	if err != nil || m == nil {
+		return "", true
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return m[1] + "." + m[2] + "." + m[3], major > 2 || (major == 2 && minor >= 40)
+}
+
 // ForUser returns a client using the token gh stores for user on apiHost.
 // gh matches the user name exactly, so the name is first looked up, ignoring
 // case, among the accounts gh knows. A gh too old to list them is given the
 // name as it is.
 func ForUser(apiHost, user string) (*Client, error) {
+	if have, ok := version(); !ok {
+		return nil, &TooOldError{Have: have}
+	}
 	login := user
 	var known []string
 	if accounts, err := Accounts(apiHost); err == nil {
@@ -250,7 +293,7 @@ func ActiveUser(apiHost string) (string, error) {
 // account when token is "". Host and token settings from the environment
 // are dropped, so they can't send keys anywhere doppel didn't ask for.
 func run(apiHost, token string, args ...string) (string, error) {
-	cmd := exec.Command("gh", args...) //nolint:gosec // fixed binary; arguments built by doppel
+	cmd, finish := proc.Command(proc.Network, "gh", args...)
 	for _, v := range os.Environ() {
 		name, _, _ := strings.Cut(v, "=")
 		switch name {
@@ -270,7 +313,11 @@ func run(apiHost, token string, args ...string) (string, error) {
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	if err := finish(cmd.Run()); err != nil {
+		var timeout *proc.TimeoutError
+		if errors.As(err, &timeout) {
+			return stdout.String(), fmt.Errorf("gh %s: %w", args[0], err)
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			return stdout.String(), fmt.Errorf("gh %s: %w", args[0], err)

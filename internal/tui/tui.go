@@ -41,8 +41,8 @@ type Action struct {
 }
 
 // KeyInfo describes how an account's keys are kept, such as
-// "passphrase, in agent". It's worked out before the browser opens, since
-// it runs ssh-keygen and ssh-add.
+// "passphrase, in agent". Working it out runs ssh-keygen and ssh-add, so
+// the browser can load it in the background (Options.LoadKeyInfo).
 type KeyInfo struct {
 	Auth, Signing []string
 }
@@ -52,8 +52,11 @@ type Options struct {
 	Env      *paths.Env
 	Accounts []*accounts.Account
 	KeyInfo  map[string]KeyInfo
-	Selected string // the account to start on
-	Status   string // a message to show briefly, such as the last action's result
+	// LoadKeyInfo works out KeyInfo in the background once the browser is
+	// showing, so slow tools can't hold up the first screen.
+	LoadKeyInfo func() map[string]KeyInfo
+	Selected    string // the account to start on
+	Status      string // a message to show briefly, such as the last action's result
 
 	// CheckUpdate looks for a newer doppel release in the background. It
 	// returns the latest version and whether it's newer; nil skips the check.
@@ -116,7 +119,12 @@ type Model struct {
 	quitting      bool
 	checkUpdate   func() (string, bool)
 	newRelease    string // a newer doppel release, once the check finds one
+	loadKeyInfo   func() map[string]KeyInfo
+	checkingKeys  bool // loadKeyInfo hasn't answered yet
 }
+
+// keyInfoMsg carries the key details loaded in the background.
+type keyInfoMsg map[string]KeyInfo
 
 type clearStatusMsg struct{}
 
@@ -160,16 +168,20 @@ func New(opts Options) Model {
 	if info == nil {
 		info = map[string]KeyInfo{}
 	}
-	return Model{list: l, keys: keys, env: opts.Env, info: info, width: 80, height: 20, status: opts.Status, checkUpdate: opts.CheckUpdate}
+	return Model{list: l, keys: keys, env: opts.Env, info: info, width: 80, height: 20, status: opts.Status, checkUpdate: opts.CheckUpdate,
+		loadKeyInfo: opts.LoadKeyInfo, checkingKeys: opts.LoadKeyInfo != nil}
 }
 
 // Action returns what the user picked; a zero Action means quit.
 func (m Model) Action() Action { return m.action }
 
-// Init starts the update check, and clears the starting status message after
-// a moment.
+// Init starts loading key details and the update check, and clears the
+// starting status message after a moment.
 func (m Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if load := m.loadKeyInfo; load != nil {
+		cmds = append(cmds, func() tea.Msg { return keyInfoMsg(load()) })
+	}
 	if m.status != "" {
 		cmds = append(cmds, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearStatusMsg{} }))
 	}
@@ -187,6 +199,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case clearStatusMsg:
 		m.status = ""
+		return m, nil
+
+	case keyInfoMsg:
+		m.info, m.checkingKeys = msg, false
 		return m, nil
 
 	case updateMsg:
@@ -370,9 +386,7 @@ func (m Model) details(acc *accounts.Account) string {
 		row("Auth key", "ssh's own keys")
 	} else {
 		row("Auth key", acc.AuthKey)
-		if len(info.Auth) > 0 {
-			fmt.Fprintf(&b, "%s%s\n", labelStyle.Render(""), badges(info.Auth))
-		}
+		m.keyBadges(&b, info.Auth)
 	}
 	if acc.SigningKey == "" {
 		row("Signing", "off")
@@ -387,8 +401,8 @@ func (m Model) details(acc *accounts.Account) string {
 			scope = "off (key kept)"
 		}
 		row("Signing", scope, acc.SigningKey)
-		if len(info.Signing) > 0 {
-			fmt.Fprintf(&b, "%s%s\n", labelStyle.Render(""), badges(info.Signing))
+		if strings.TrimSuffix(acc.SigningKey, ".pub") != strings.TrimSuffix(acc.AuthKey, ".pub") {
+			m.keyBadges(&b, info.Signing) // a signing key that's the auth key shows its badges once
 		}
 	}
 	if m.env != nil {
@@ -397,6 +411,17 @@ func (m Model) details(acc *accounts.Account) string {
 
 	b.WriteString("\n" + hintStyle.Render("e edit · b bind folder · * make default\nx export · u upload · t test · d delete"))
 	return b.String()
+}
+
+// keyBadges adds a key's status badges below it, or a note while they're
+// still being worked out.
+func (m Model) keyBadges(b *strings.Builder, words []string) {
+	switch {
+	case len(words) > 0:
+		fmt.Fprintf(b, "%s%s\n", labelStyle.Render(""), badges(words))
+	case m.checkingKeys:
+		fmt.Fprintf(b, "%s%s\n", labelStyle.Render(""), hintStyle.Render("checking…"))
+	}
 }
 
 // badges renders key status words as badges, colored by what they mean.

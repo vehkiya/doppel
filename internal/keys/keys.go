@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/vehkiya/doppel/internal/proc"
 )
 
 // LiteralPrefix marks a public key written inline instead of as a path, a
@@ -120,7 +122,8 @@ func CheckProtection(key string) Protection {
 		return Unknown
 	}
 	// Loading the key with an empty passphrase only works when it has none.
-	if err := exec.Command("ssh-keygen", "-y", "-P", "", "-f", key).Run(); err != nil { //nolint:gosec // fixed binary; key path the user chose
+	cmd, finish := proc.Command(proc.Local, "ssh-keygen", "-y", "-P", "", "-f", key)
+	if err := finish(cmd.Run()); err != nil {
 		return Encrypted
 	}
 	return Unencrypted
@@ -133,7 +136,9 @@ func InAgent(key string) (loaded, running bool) {
 	if err != nil {
 		return false, false
 	}
-	out, err := exec.Command("ssh-add", "-l").Output()
+	cmd, finish := proc.Command(proc.Local, "ssh-add", "-l")
+	out, err := cmd.Output()
+	err = finish(err)
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
@@ -170,6 +175,7 @@ func Generate(path, comment string, passphrase *string, stdin io.Reader, stdout,
 	if passphrase != nil {
 		args = append(args, "-q", "-N", *passphrase)
 	}
+	// ssh-keygen may ask for a passphrase, so it has no time limit.
 	cmd := exec.Command("ssh-keygen", args...) //nolint:gosec // fixed binary; arguments built by doppel
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	if err := cmd.Run(); err != nil {

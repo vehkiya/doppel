@@ -36,6 +36,16 @@ type app struct {
 	copy     func(text string) error          // puts text on the clipboard
 
 	unlock func() // releases the write lock while this command holds it
+
+	// githubHosts remembers which hosts are GitHub, and the host gh talks to
+	// for each, since finding out may run gh. The browser forgets it each
+	// time it opens, so signing in to gh meanwhile counts.
+	githubHosts map[string]githubHost
+}
+
+type githubHost struct {
+	api string
+	ok  bool
 }
 
 func (a *app) printf(format string, args ...any) {

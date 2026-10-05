@@ -48,7 +48,7 @@ func (a *app) cmdUpload(args []string) int {
 		exportArgs = append(exportArgs, "--signing")
 	}
 
-	apiHosts := githubHosts(acc)
+	apiHosts := a.githubAPIHosts(acc)
 	if len(apiHosts) == 0 {
 		return a.fail(fmt.Errorf("none of account %s's hosts (%s) is GitHub as far as doppel can tell. If one runs GitHub Enterprise Server, sign gh in to it with `gh auth login -h <host>` and run this again; for other hosts, add the keys by hand with `doppel export %s`",
 			acc.ID, strings.Join(acc.Hosts, ", "), acc.ID))
@@ -95,10 +95,10 @@ func (a *app) offerGitHubUser(list []*accounts.Account, acc *accounts.Account, l
 
 // githubHosts lists the hosts gh talks to for the account's GitHub hosts.
 // github.com and ssh.github.com share one.
-func githubHosts(acc *accounts.Account) []string {
+func (a *app) githubAPIHosts(acc *accounts.Account) []string {
 	var apiHosts []string
 	for _, h := range acc.Hosts {
-		if api, ok := github.APIHost(h); ok && !slices.Contains(apiHosts, api) {
+		if api, ok := a.apiHost(h); ok && !slices.Contains(apiHosts, api) {
 			apiHosts = append(apiHosts, api)
 		}
 	}
@@ -113,8 +113,13 @@ func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exporte
 	client, err := github.ForUser(apiHost, acc.GitHubUser)
 	if err != nil {
 		var notSignedIn *github.NotSignedInError
-		if errors.As(err, &notSignedIn) {
+		var tooOld *github.TooOldError
+		switch {
+		case errors.As(err, &notSignedIn):
 			a.warnf("%v. Sign in with `gh auth login -h %s` and pick that account, then run this again. Meanwhile, here's how to add the keys by hand.\n", notSignedIn, apiHost)
+			return 0, true
+		case errors.As(err, &tooOld):
+			a.warnf("%v. Meanwhile, here's how to add the keys by hand.\n", tooOld)
 			return 0, true
 		}
 		return a.fail(err), false

@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/vehkiya/doppel/internal/proc"
 )
 
 // Git 2.34 added SSH commit signing, which every account file configures.
@@ -64,7 +66,7 @@ func runEnv(dir string, env []string, args ...string) (string, error) {
 
 // runInput runs git with input on its standard input (none when nil).
 func runInput(dir string, env []string, input []byte, args ...string) (string, error) {
-	cmd := exec.Command("git", args...) //nolint:gosec // fixed binary; arguments are built by doppel
+	cmd, finish := proc.Command(proc.Local, "git", args...)
 	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
@@ -74,9 +76,13 @@ func runInput(dir string, env []string, input []byte, args ...string) (string, e
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	if err := finish(cmd.Run()); err != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		var timeout *proc.TimeoutError
+		switch {
+		case errors.As(err, &timeout):
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		case errors.As(err, &exitErr):
 			return stdout.String(), &exitError{args: args, code: exitErr.ExitCode(), stderr: strings.TrimSpace(stderr.String())}
 		}
 		return "", fmt.Errorf("running git: %w", err)

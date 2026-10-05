@@ -84,7 +84,7 @@ func (a *app) checkLogin(acc *accounts.Account, host string, batch bool) (bool, 
 	switch {
 	case !res.Accepted:
 		return false, res.Problem
-	case acc.GitHubUser != "" && isGitHub(host) && !strings.EqualFold(res.User, acc.GitHubUser):
+	case acc.GitHubUser != "" && a.isGitHub(host) && !strings.EqualFold(res.User, acc.GitHubUser):
 		return false, fmt.Sprintf("logged in as %s, but the account's GitHub user is %s", res.User, acc.GitHubUser)
 	}
 	return true, "logged in as " + res.User
@@ -111,9 +111,23 @@ func (a *app) needsPassphrase(key string, batch bool) string {
 
 // isGitHub reports whether host is GitHub (github.com, GHE.com, or a GitHub
 // Enterprise Server gh is signed in to).
-func isGitHub(host string) bool {
-	_, ok := github.APIHost(host)
+func (a *app) isGitHub(host string) bool {
+	_, ok := a.apiHost(host)
 	return ok
+}
+
+// apiHost is github.APIHost, asked once per host for the whole command.
+func (a *app) apiHost(host string) (string, bool) {
+	key := strings.ToLower(host)
+	if h, ok := a.githubHosts[key]; ok {
+		return h.api, h.ok
+	}
+	api, ok := github.APIHost(host)
+	if a.githubHosts == nil {
+		a.githubHosts = map[string]githubHost{}
+	}
+	a.githubHosts[key] = githubHost{api, ok}
+	return api, ok
 }
 
 func (a *app) checkRow(ok bool, label, detail string) {

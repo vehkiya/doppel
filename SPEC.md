@@ -111,10 +111,10 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
     - `github.com`, which GitHub Enterprise Cloud (including Enterprise Managed Users) shares
     - its port-443 SSH endpoint `ssh.github.com`
     - `*.ghe.com` (GitHub Enterprise Cloud with data residency)
-    - any other host `gh` is signed in to. `gh` only signs in to GitHub, so this is how GitHub Enterprise Server is found. The check is a local token lookup; nothing connects.
+    - any other host `gh` is signed in to. `gh` only signs in to GitHub, so this is how GitHub Enterprise Server is found. The check reads `gh auth status --hostname <host> --json hosts` (plain `gh auth status --hostname <host>` on a gh too old for `--json`), so no token is ever fetched just to answer it, and nothing connects. Each command asks about a host at most once; the browser asks again each time it opens.
   - **Pointing gh at a host:** `GH_HOST` targets each host.
   - **Unrecognized hosts:** if no host is recognized, doppel suggests `gh auth login -h <host>` for an Enterprise Server, or `export` for anything else.
-  - Runs with the token from `gh auth token --user <username>`, so the key goes to the account's GitHub user without switching gh's active account.
+  - Runs with the token from `gh auth token --user <username>`, so the key goes to the account's GitHub user without switching gh's active account. That needs gh 2.40 or newer: with an older gh, `upload` says so and falls back to `export`.
   - **The user's spelling:** gh matches user names exactly, so doppel first reads the signed-in accounts from `gh auth status --hostname <host> --json hosts` (which prints no tokens), finds the account's user ignoring case, and gives gh its spelling. A gh too old to have `--json` is given the name as stored. When the stored name differs from GitHub's only in capitals, `upload` offers to correct it in a terminal, and otherwise prints the `doppel edit` command that does.
 - **R5.2** Before uploading, doppel checks:
   - **Already uploaded?** It compares against `gh api user/keys` and `user/ssh_signing_keys`, and reports "already on GitHub" instead of failing.
@@ -348,7 +348,10 @@ Every account file sets every setting doppel manages, including a "reset" value 
 | `ssh-keygen` | generating keys, fingerprints, passphrase check, signing check | yes |
 | `ssh` | login check | yes |
 | `ssh-add` | agent status | no |
-| `gh` | GitHub uploads | no (falls back to `export`) |
+| `gh` ≥ 2.40 | GitHub uploads | no (falls back to `export`) |
+
+- **Time limits:** every tool that can't be waiting for the user runs with a time limit (`proc.Command`): 15 seconds for local work (`git`, `ssh-keygen -y` and `-Y verify`, `ssh-add -l`, `ssh -G`, `ssh -V`, the clipboard tools), 60 seconds for anything that may use the network (`gh`, the batch-mode `ssh -T` login check). A tool that runs out is stopped, and the error names it. Generating a key, signing, and the interactive login check may ask for a passphrase, so they have no limit.
+- **The browser draws first:** it works out each key's status (passphrase, in agent) in the background, showing "checking…" until it has it.
 
 ### 6.6 Code and conventions
 
@@ -364,6 +367,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
     plan/       staged writes with backups and rollback (what --dry-run previews)
     atomicfile/ replacing a file atomically (plan and update)
     paths/      where files live; normalizing folders and comparing paths
+    proc/       running external tools with a time limit
     git/        running git; reading and writing Git config files through it
     keys/       reading, generating and checking SSH keys; the login and signing checks
     ui/         palette, styles and diff rendering
