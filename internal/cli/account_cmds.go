@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -81,6 +82,16 @@ func (a *app) cmdAdd(args []string) int {
 	if !ok {
 		return code
 	}
+	if len(positional) > 1 {
+		return a.usageError(addUsage)
+	}
+	if a.interactive && onlyWriteFlags(fs) {
+		id := ""
+		if len(positional) == 1 {
+			id = positional[0]
+		}
+		return a.addWithWizard(id, w)
+	}
 	if len(positional) != 1 {
 		return a.usageError(addUsage)
 	}
@@ -103,7 +114,11 @@ func (a *app) cmdAdd(args []string) int {
 	if err := acc.Validate(); err != nil {
 		return a.fail(err)
 	}
-	pending, err := a.applyKeys(fs, k, acc)
+	ch, err := keyChangesFromFlags(fs, k)
+	if err != nil {
+		return a.fail(err)
+	}
+	pending, err := a.applyKeyChanges(acc, ch)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -176,12 +191,17 @@ func (a *app) cmdEdit(args []string) int {
 		}
 		changed = true
 	}
-	pending, err := a.applyKeys(fs, k, acc)
+	ch, err := keyChangesFromFlags(fs, k)
 	if err != nil {
 		return a.fail(err)
 	}
-	for _, name := range keyFlagNames {
-		changed = changed || flagWasSet(fs, name)
+	pending, err := a.applyKeyChanges(acc, ch)
+	if err != nil {
+		return a.fail(err)
+	}
+	changed = changed || ch.any()
+	if !changed && a.interactive && onlyWriteFlags(fs) {
+		return a.editWithWizard(list, acc, w)
 	}
 	if !changed {
 		return a.usageError(editUsage)
@@ -222,11 +242,36 @@ func (a *app) cmdRm(args []string) int {
 			rest = append(rest, other)
 		}
 	}
+	if acc.Default && len(rest) > 0 && a.interactive {
+		if err := a.chooseNewDefault(rest); err != nil {
+			return a.fail(err)
+		}
+	}
 	code = a.save(rest, w, fmt.Sprintf("Deleted account %s", acc.ID))
-	if code == 0 && acc.Default && len(rest) > 0 && !w.dryRun {
+	if code == 0 && acc.Default && accounts.Default(rest) == nil && len(rest) > 0 && !w.dryRun {
 		a.notef("There's no default account now. Choose one with: doppel default <id>")
 	}
 	return code
+}
+
+// chooseNewDefault asks which account takes over as the default when the
+// default one is deleted.
+func (a *app) chooseNewDefault(rest []*accounts.Account) error {
+	options := []huh.Option[string]{}
+	for _, other := range rest {
+		options = append(options, huh.NewOption(other.ID+" ("+other.Email+")", other.ID))
+	}
+	options = append(options, huh.NewOption("No default account", ""))
+	choice := rest[0].ID
+	if err := a.runForm(huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().Title("Which account should be the default now?").
+			Description("The default account is used for repos outside every folder").
+			Options(options...).Value(&choice),
+	))); err != nil {
+		return err
+	}
+	accounts.SetDefault(rest, accounts.Find(rest, choice))
+	return nil
 }
 
 const renameUsage = "doppel rename <id> <new-id> [--dry-run]"

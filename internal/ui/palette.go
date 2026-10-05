@@ -4,15 +4,49 @@ package ui
 
 import "github.com/charmbracelet/lipgloss"
 
-// The doppel palette, shared with sshx (see AGENTS.md). Colors join this
-// list as the interface starts using them.
+// The doppel palette, shared with sshx (see AGENTS.md).
 var (
-	colorCoral = lipgloss.Color("#FF5F87") // headers / selections
-	colorCyan  = lipgloss.Color("#00D7D7") // prompts / cursors / keys
-	colorGreen = lipgloss.Color("#5FD787") // success / badges
-	colorAmber = lipgloss.Color("#FFAF00") // warnings
-	colorRed   = lipgloss.Color("#FF4672") // errors / destructive actions
+	ColorPurple = lipgloss.Color("#7D56F4") // brand / accent
+	ColorCoral  = lipgloss.Color("#FF5F87") // headers / selections
+	ColorCyan   = lipgloss.Color("#00D7D7") // prompts / cursors / keys
+	ColorGreen  = lipgloss.Color("#5FD787") // success / badges
+	ColorAmber  = lipgloss.Color("#FFAF00") // warnings
+	ColorRed    = lipgloss.Color("#FF4672") // errors / destructive actions
 
-	colorGray = lipgloss.Color("#8A8A8A")
-	colorDim  = lipgloss.Color("#767676")
+	ColorWhite     = lipgloss.Color("#FFFFFF")
+	ColorBlack     = lipgloss.Color("#000000")
+	ColorLightGray = lipgloss.Color("#EEEEEE")
+	ColorGray      = lipgloss.Color("#8A8A8A")
+	ColorDim       = lipgloss.Color("#767676")
+	ColorSeparator = lipgloss.Color("#444444")
+	ColorDarkGray  = lipgloss.Color("#262626")
+	ColorSlate     = lipgloss.Color("#5F87AF")
 )
+
+// Badge renders a short bold label on a solid background.
+type Badge int
+
+// The badge kinds, by meaning.
+const (
+	BadgeOK     Badge = iota // green: a good state
+	BadgeWarn                // amber: works, but worth knowing
+	BadgeInfo                // slate: neutral
+	BadgeAccent              // purple: the brand
+	BadgeDanger              // red: destructive
+)
+
+// Render draws text as a badge.
+func (b Badge) Render(text string) string {
+	fg, bg := ColorBlack, ColorGreen
+	switch b {
+	case BadgeWarn:
+		bg = ColorAmber
+	case BadgeInfo:
+		fg, bg = ColorWhite, ColorSlate
+	case BadgeAccent:
+		fg, bg = ColorWhite, ColorPurple
+	case BadgeDanger:
+		fg, bg = ColorWhite, ColorRed
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(fg).Background(bg).Padding(0, 1).Render(text)
+}

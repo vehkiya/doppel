@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/git"
 	"github.com/vehkiya/doppel/internal/keys"
@@ -29,6 +29,8 @@ type app struct {
 	stdout      io.Writer
 	stderr      io.Writer
 	interactive bool // stdin is a terminal, so confirmations can be asked
+	accessible  bool // run forms as plain line-by-line prompts ($ACCESSIBLE, and tests)
+	browsable   bool // stdin and stdout are terminals, so the browser can open
 
 	generate func(path, comment string) error // creates a key, asking for its passphrase
 	copy     func(text string) error          // puts text on the clipboard
@@ -71,16 +73,48 @@ func (a *app) confirm(question string, assumeYes bool) error {
 	if !a.interactive {
 		return fmt.Errorf("%s Rerun with --yes to confirm", question)
 	}
-	a.printf("%s [y/N] ", question)
-	line, err := a.stdin.ReadString('\n')
-	if err != nil && line == "" {
+	yes := false
+	err := a.runForm(huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().Title(question).Affirmative("Yes").Negative("No").Value(&yes),
+	)))
+	if err != nil {
+		return err
+	}
+	if !yes {
 		return errCancelled
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return nil
+	return nil
+}
+
+// runForm runs a Huh form in doppel's theme. In accessible mode, used by
+// tests, it reads answers line by line from stdin instead of drawing the form.
+func (a *app) runForm(form *huh.Form) error {
+	form = form.WithTheme(ui.HuhTheme()).WithShowHelp(true)
+	if a.accessible {
+		form = form.WithAccessible(true).WithInput(lineReader{a.stdin}).WithOutput(a.stdout)
 	}
-	return errCancelled
+	err := form.Run()
+	if errors.Is(err, huh.ErrUserAborted) {
+		return errCancelled
+	}
+	return err
+}
+
+// lineReader hands over input one line per Read. Huh's accessible mode
+// scans each answer with a new scanner, which would otherwise swallow the
+// answers after it.
+type lineReader struct{ r *bufio.Reader }
+
+func (l lineReader) Read(p []byte) (int, error) {
+	line, err := l.r.ReadString('\n')
+	if len(line) > len(p) {
+		line = line[:len(p)]
+	}
+	n := copy(p, line)
+	if n > 0 {
+		return n, nil
+	}
+	return 0, err
 }
 
 // Run runs doppel with the process's arguments and terminal, and returns
@@ -110,6 +144,9 @@ func newApp() (*app, error) {
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 		interactive: term.IsTerminal(os.Stdin.Fd()),
+		browsable:   term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()),
+		// ACCESSIBLE turns forms into plain prompts for screen readers, as in other Charm tools.
+		accessible: os.Getenv("ACCESSIBLE") != "",
 		generate: func(path, comment string) error {
 			return keys.Generate(path, comment, nil, os.Stdin, os.Stdout, os.Stderr)
 		},
@@ -119,6 +156,12 @@ func newApp() (*app, error) {
 
 // run dispatches the command line and returns the process exit status.
 func (a *app) run(args []string) int {
+	if len(args) == 0 && a.browsable {
+		if err := git.Check(); err != nil {
+			return a.fail(err)
+		}
+		return a.browse()
+	}
 	cmd := "ls"
 	if len(args) > 0 {
 		cmd, args = args[0], args[1:]
@@ -163,13 +206,15 @@ func (a *app) run(args []string) int {
 func (a *app) printUsage() {
 	a.printf("%s\n\n", ui.Title.Render("doppel — Git accounts per folder"))
 	a.printf(`Usage:
-  doppel                                 List accounts
+  doppel                                 Browse accounts (lists them when not in a terminal)
   doppel ls                              List accounts
+  doppel add [<id>]                      Add an account, asking for each setting
   doppel add <id> --name <name> --email <email> [--host <host>]...
              [--github-user <user>] [--folder <folder>]... [--default]
-             [key flags]                 Add an account
-  doppel edit <id> [same flags as add]   Change an account (--host and --folder
-                                         replace the current list)
+             [key flags]                 Add an account without questions
+  doppel edit <id>                       Change an account, asking for each setting
+  doppel edit <id> [same flags as add]   Change only what the flags say (--host and
+                                         --folder replace the current list)
   doppel rm <id>                         Delete an account (key files are kept)
   doppel rename <id> <new-id>            Change an account's ID
   doppel bind <id> <folder>...           Use an account for repos in these folders
@@ -194,6 +239,8 @@ Key flags (add and edit):
 Commands that change files accept:
   --dry-run   show the changes without writing them
   --yes       answer yes to confirmations
+
+Set ACCESSIBLE=1 for plain prompts instead of interactive forms.
 
 Accounts live in ~/.config/doppel/accounts/<id>.gitconfig. Repos inside a
 bound folder use that folder's account; everything else uses the default.

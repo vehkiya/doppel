@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -175,4 +176,52 @@ func Generate(path, comment string, passphrase *string, stdin io.Reader, stdout,
 		return fmt.Errorf("ssh-keygen: %w", err)
 	}
 	return nil
+}
+
+// Discover lists the keys in sshDir an account could use, sorted: private
+// keys, and public keys whose private half isn't on disk because an agent
+// holds it.
+func Discover(sshDir string) []string {
+	entries, err := os.ReadDir(sshDir)
+	if err != nil {
+		return nil
+	}
+	var found []string
+	for _, entry := range entries {
+		name := entry.Name()
+		path := filepath.Join(sshDir, name)
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, "-cert.pub") {
+			continue
+		}
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if strings.HasSuffix(name, ".pub") {
+			if _, err := os.Stat(strings.TrimSuffix(path, ".pub")); err == nil {
+				continue // listed through its private key
+			}
+			if _, err := ReadPublic(path); err == nil {
+				found = append(found, path)
+			}
+			continue
+		}
+		if isPrivateKey(path) {
+			found = append(found, path)
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+// isPrivateKey reports whether a file starts like an OpenSSH or PEM private key.
+func isPrivateKey(path string) bool {
+	f, err := os.Open(filepath.Clean(path)) //nolint:gosec // a file in the user's ~/.ssh
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, 64)
+	n, _ := io.ReadFull(f, head)
+	first, _, _ := strings.Cut(string(head[:n]), "\n")
+	return strings.HasPrefix(first, "-----BEGIN ") && strings.HasSuffix(strings.TrimSpace(first), "PRIVATE KEY-----")
 }

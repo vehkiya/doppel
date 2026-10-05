@@ -54,9 +54,12 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - **Signing key** (optional)
   - **Sign commits / sign tags:** both default to on when there's a signing key
   - **Folders**
-- **R1.3** Deleting an account removes its account file, its folders and its `allowed_signers` entry. It never deletes key files. If the account was the default, doppel asks which account becomes the new default, or allows none.
+- **R1.3** Deleting an account removes its account file, its folders and its `allowed_signers` entry. It never deletes key files. If the account was the default, doppel asks in a terminal which account becomes the new default, or none. Without a terminal it leaves none and says how to pick one.
 - **R1.4** Renaming an account (changing its ID) keeps everything else unchanged.
-- **R1.5 First run.** If the global Git config already has `user.name` and `user.email`, doppel offers to import them, along with any existing SSH signing setup, as the default account.
+- **R1.5 First run.** If the global Git config already has `user.name` and `user.email`, the add wizard for the first account offers to start from them.
+  - It also brings in any SSH signing setup (`gpg.format = ssh`, `user.signingkey`, `commit.gpgsign`, `tag.gpgsign`) and an auth key named with `-i` in `core.sshCommand`.
+  - Every value can still be changed before saving.
+  - The global settings stay where they are; doppel's include overrides them.
 
 ### R2. Folders and the default account
 
@@ -156,20 +159,30 @@ Checks every account and prints how to fix each problem it finds:
 
 ### R9. Interface
 
-- **R9.1** `doppel` with no arguments opens a TUI list of accounts, in the style of sshx:
-  - **Left pane:** account IDs, with the default marked.
-  - **Right pane:** email, folders, keys, and status badges (passphrase, in agent, signing on).
-  - **Keys:** add (`a`), edit (`e`), delete (`d`), bind a folder (`b`), set as default (`*`), export (`x`), upload (`u`), quit (`q`).
+- **R9.1** `doppel` with no arguments opens an account browser in the style of sshx when both stdin and stdout are terminals. Otherwise it prints `ls`.
+  - **Left pane:** account IDs and emails, with the default marked ★; `/` filters.
+  - **Right pane:** name, email, hosts, GitHub user, folders, keys with status badges (passphrase, in agent), signing, and the account file. On terminals narrower than 100 columns, Tab switches between the list and the details.
+  - **Keys:** edit (`enter`/`e`), add (`a`), delete (`d`, then `y` to confirm), bind a folder (`b`), make default (`*`), export (`x`), test (`t`), quit (`q`/`esc`). Upload (`u`) comes with milestone 4.
+  - Each action leaves the browser, runs as its command would, and returns to the same account. A one-line result shows in the browser; output to read (`export`, `test`) and warnings or errors wait for Enter first.
+- **R9.1a** `doppel add` and `doppel edit <id>` without flags, in a terminal, walk through a wizard instead:
+  - identity, hosts and GitHub user
+  - folders and whether it's the default
+  - auth key: keep, generate, a key found in `~/.ssh` (including `.pub` files for agent-held keys), another file, or none
+  - signing, and what to sign
+  - a review before saving
+
+  With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
+- **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers.
 - **R9.2** Every action is also a subcommand, with flags for non-interactive use, so configsh or scripts can set up accounts.
 - **R9.3** `dop` is an alias for `doppel` (a shell alias in configsh, like sshx's `fssh`), and doppel behaves identically under either name.
 
 ## 5. Command line
 
 ```
-doppel                                   Open the TUI
+doppel                                   Browse accounts (prints ls when not in a terminal)
 doppel ls                                List accounts
 doppel add [id]                          Add an account (wizard, or flags below)
-doppel edit <id>                         Edit an account
+doppel edit <id>                         Edit an account (wizard, or flags below)
 doppel rm <id>                           Delete an account (keys are kept)
 doppel rename <id> <new-id>              Change an account's ID
 doppel bind <id> <folder>...             Bind folders to an account
@@ -288,7 +301,8 @@ Every account file sets every setting doppel manages, including a "reset" value 
   ```
   main.go          calls cli.Run
   internal/
-    cli/       commands, flags, prompts, whoami (later: the wizards and the TUI)
+    cli/       commands, flags, prompts, whoami, the wizards, and the loop around the browser
+    tui/       the account browser (picks an action; cli carries it out)
     accounts/  the Account model, its managed settings, loading and validation
     store/     writing accounts: account files, the generated index, the global include
     plan/      staged writes with backups and atomic replacement (what --dry-run previews)

@@ -30,22 +30,29 @@ func (k *keyFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&k.signTags, "sign-tags", true, "sign tags")
 }
 
-// keyFlagNames lists the flags that change keys, for edit to know whether
-// anything was asked for.
-var keyFlagNames = []string{"auth-key", "generate-auth-key", "signing-key", "generate-signing-key",
-	"sign-with-auth-key", "no-signing", "sign-commits", "sign-tags"}
-
 // pendingKey is a key to generate before saving.
 type pendingKey struct {
 	path, comment, purpose string
 }
 
-// applyKeys sets acc's keys from the command line. Keys to generate are
-// returned instead of created, so a dry run can show them without writing.
-func (a *app) applyKeys(fs *flag.FlagSet, k keyFlags, acc *accounts.Account) ([]pendingKey, error) {
+// keyChanges says how to change an account's keys. Flags and the wizard
+// both describe their choices this way.
+type keyChanges struct {
+	auth            *string // the new auth key as given; "" for ssh's own keys, nil to keep it
+	generateAuth    bool
+	signing         *string // the new signing key as given; "" to stop signing, nil to keep it
+	generateSigning bool
+	signWithAuth    bool
+	signCommits     *bool // nil keeps the current setting
+	signTags        *bool
+}
+
+// keyChangesFromFlags reads key changes from the command line.
+func keyChangesFromFlags(fs *flag.FlagSet, k keyFlags) (keyChanges, error) {
 	set := func(name string) bool { return flagWasSet(fs, name) }
+	var ch keyChanges
 	if set("auth-key") && k.generateAuth {
-		return nil, errors.New("use either --auth-key or --generate-auth-key")
+		return ch, errors.New("use either --auth-key or --generate-auth-key")
 	}
 	choices := 0
 	for _, name := range []string{"signing-key", "generate-signing-key", "sign-with-auth-key", "no-signing"} {
@@ -54,19 +61,48 @@ func (a *app) applyKeys(fs *flag.FlagSet, k keyFlags, acc *accounts.Account) ([]
 		}
 	}
 	if choices > 1 {
-		return nil, errors.New("use only one of --signing-key, --generate-signing-key, --sign-with-auth-key and --no-signing")
+		return ch, errors.New("use only one of --signing-key, --generate-signing-key, --sign-with-auth-key and --no-signing")
 	}
+	if set("auth-key") {
+		ch.auth = &k.authKey
+	}
+	ch.generateAuth = k.generateAuth
+	switch {
+	case set("signing-key"):
+		ch.signing = &k.signingKey
+	case k.noSigning:
+		none := ""
+		ch.signing = &none
+	}
+	ch.generateSigning, ch.signWithAuth = k.generateSigning, k.signWithAuth
+	if set("sign-commits") {
+		ch.signCommits = &k.signCommits
+	}
+	if set("sign-tags") {
+		ch.signTags = &k.signTags
+	}
+	return ch, nil
+}
 
+// any reports whether ch changes anything.
+func (ch keyChanges) any() bool {
+	return ch.auth != nil || ch.generateAuth || ch.signing != nil || ch.generateSigning || ch.signWithAuth ||
+		ch.signCommits != nil || ch.signTags != nil
+}
+
+// applyKeyChanges sets acc's keys. Keys to generate are returned instead of
+// created, so a dry run can show them without writing.
+func (a *app) applyKeyChanges(acc *accounts.Account, ch keyChanges) ([]pendingKey, error) {
 	var pending []pendingKey
 	sshDir := filepath.Join(a.env.Home, ".ssh")
 	switch {
-	case set("auth-key"):
-		key, err := a.keyPath(k.authKey, false)
+	case ch.auth != nil:
+		key, err := a.keyPath(*ch.auth, false)
 		if err != nil {
 			return nil, err
 		}
 		acc.AuthKey = key
-	case k.generateAuth:
+	case ch.generateAuth:
 		path, err := newKeyPath(sshDir, acc.ID, false, "--auth-key")
 		if err != nil {
 			return nil, err
@@ -77,35 +113,33 @@ func (a *app) applyKeys(fs *flag.FlagSet, k keyFlags, acc *accounts.Account) ([]
 
 	wasSigning := acc.SigningKey != ""
 	switch {
-	case set("signing-key"):
-		key, err := a.keyPath(k.signingKey, true)
+	case ch.signing != nil:
+		key, err := a.keyPath(*ch.signing, true)
 		if err != nil {
 			return nil, err
 		}
 		acc.SigningKey = key
-	case k.generateSigning:
+	case ch.generateSigning:
 		path, err := newKeyPath(sshDir, acc.ID, true, "--signing-key")
 		if err != nil {
 			return nil, err
 		}
 		acc.SigningKey = a.env.Shorten(path) + ".pub"
 		pending = append(pending, pendingKey{path, acc.Email, "signing key"})
-	case k.signWithAuth:
+	case ch.signWithAuth:
 		if acc.AuthKey == "" {
 			return nil, errors.New("--sign-with-auth-key needs an auth key; add one with --auth-key or --generate-auth-key")
 		}
 		acc.SigningKey = keys.PublicPath(acc.AuthKey)
-	case k.noSigning:
-		acc.SigningKey = ""
 	}
 	if acc.SigningKey != "" && !wasSigning {
 		acc.SignCommits, acc.SignTags = true, true
 	}
-	if set("sign-commits") {
-		acc.SignCommits = k.signCommits
+	if ch.signCommits != nil {
+		acc.SignCommits = *ch.signCommits
 	}
-	if set("sign-tags") {
-		acc.SignTags = k.signTags
+	if ch.signTags != nil {
+		acc.SignTags = *ch.signTags
 	}
 	return pending, nil
 }

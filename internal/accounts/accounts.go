@@ -245,6 +245,30 @@ func ValidateID(id string) error {
 	return nil
 }
 
+// ValidateEmail checks a commit email address.
+func ValidateEmail(email string) error {
+	if !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\n<>") {
+		return fmt.Errorf("%q isn't a valid email address", email)
+	}
+	return nil
+}
+
+// ValidateHost checks a Git host name.
+func ValidateHost(host string) error {
+	if !hostPattern.MatchString(host) {
+		return fmt.Errorf("%q isn't a valid host name", host)
+	}
+	return nil
+}
+
+// ValidateGitHubUser checks a GitHub username; "" (none) is fine.
+func ValidateGitHubUser(user string) error {
+	if user != "" && !githubUserPattern.MatchString(user) {
+		return fmt.Errorf("%q isn't a valid GitHub username", user)
+	}
+	return nil
+}
+
 // Validate checks one account's fields.
 func (a *Account) Validate() error {
 	if err := ValidateID(a.ID); err != nil {
@@ -259,16 +283,16 @@ func (a *Account) Validate() error {
 	if a.Email == "" {
 		return fmt.Errorf("account %s needs an email (--email)", a.ID)
 	}
-	if !strings.Contains(a.Email, "@") || strings.ContainsAny(a.Email, " \t\n<>") {
-		return fmt.Errorf("account %s: %q isn't a valid email address", a.ID, a.Email)
+	if err := ValidateEmail(a.Email); err != nil {
+		return fmt.Errorf("account %s: %w", a.ID, err)
 	}
 	for _, h := range a.Hosts {
-		if !hostPattern.MatchString(h) {
-			return fmt.Errorf("account %s: %q isn't a valid host name", a.ID, h)
+		if err := ValidateHost(h); err != nil {
+			return fmt.Errorf("account %s: %w", a.ID, err)
 		}
 	}
-	if a.GitHubUser != "" && !githubUserPattern.MatchString(a.GitHubUser) {
-		return fmt.Errorf("account %s: %q isn't a valid GitHub username", a.ID, a.GitHubUser)
+	if err := ValidateGitHubUser(a.GitHubUser); err != nil {
+		return fmt.Errorf("account %s: %w", a.ID, err)
 	}
 	for _, f := range a.Folders {
 		if err := paths.ValidateFolder(f); err != nil {

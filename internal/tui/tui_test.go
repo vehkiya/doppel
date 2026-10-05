@@ -1,0 +1,166 @@
+package tui
+
+import (
+	"regexp"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/paths"
+)
+
+func testAccounts() []*accounts.Account {
+	return []*accounts.Account{
+		{ID: "personal", Name: "Jane Doe", Email: "jane@personal.dev", Default: true, Hosts: []string{"github.com"},
+			AuthKey: "~/.ssh/id_ed25519_personal", SigningKey: "~/.ssh/id_ed25519_personal.pub", SignCommits: true, SignTags: true},
+		{ID: "work", Name: "Jane Doe", Email: "jane@acme.com", Hosts: []string{"github.com", "gitlab.acme.com"},
+			Folders: []string{"~/projects/work/", "~/clients/"}, AuthKey: "~/.ssh/id_ed25519_work"},
+	}
+}
+
+func newModel(t *testing.T, list []*accounts.Account, width, height int) tea.Model {
+	t.Helper()
+	env := &paths.Env{Home: "/home/jane", ConfigDir: "/home/jane/.config"}
+	info := map[string]KeyInfo{"personal": {Auth: []string{"passphrase", "in agent"}}, "work": {Auth: []string{"no passphrase"}}}
+	var m tea.Model = New(Options{Env: env, Accounts: list, KeyInfo: info, Selected: "work"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return m
+}
+
+func press(m tea.Model, keys ...string) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	for _, k := range keys {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		switch k {
+		case "enter":
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+		case "tab":
+			msg = tea.KeyMsg{Type: tea.KeyTab}
+		case "esc":
+			msg = tea.KeyMsg{Type: tea.KeyEscape}
+		}
+		m, cmd = m.Update(msg)
+	}
+	return m, cmd
+}
+
+func TestKeysPickActions(t *testing.T) {
+	cases := map[string]ActionKind{
+		"enter": Edit, "e": Edit, "a": Add, "b": Bind, "*": SetDefault, "x": Export, "t": Test,
+	}
+	for k, want := range cases {
+		m, cmd := press(newModel(t, testAccounts(), 120, 30), k)
+		if got := m.(Model).Action(); got.Kind != want || got.ID != "work" {
+			t.Errorf("%s: action = %+v, want %s on work", k, got, want)
+		}
+		if cmd == nil {
+			t.Errorf("%s: the browser didn't quit to run the action", k)
+		}
+	}
+}
+
+func TestDeleteAsksFirst(t *testing.T) {
+	m, _ := press(newModel(t, testAccounts(), 120, 30), "d")
+	if !strings.Contains(m.View(), "Delete account work?") {
+		t.Fatalf("no confirmation shown:\n%s", m.View())
+	}
+	m, _ = press(m, "n")
+	if got := m.(Model).Action(); got.Kind != Quit {
+		t.Errorf("answering n picked %+v", got)
+	}
+	m, _ = press(m, "d", "y")
+	if got := m.(Model).Action(); got.Kind != Delete || got.ID != "work" {
+		t.Errorf("answering y picked %+v", got)
+	}
+}
+
+func TestFilteringOwnsTheKeys(t *testing.T) {
+	m, _ := press(newModel(t, testAccounts(), 120, 30), "/", "a", "x")
+	if got := m.(Model).Action(); got.Kind != Quit {
+		t.Errorf("typing in the filter picked %+v", got)
+	}
+}
+
+func TestQuit(t *testing.T) {
+	for _, k := range []string{"q", "esc"} {
+		m, cmd := press(newModel(t, testAccounts(), 120, 30), k)
+		if m.(Model).Action().Kind != Quit || cmd == nil {
+			t.Errorf("%s didn't quit", k)
+		}
+	}
+}
+
+func TestViewFitsTheTerminal(t *testing.T) {
+	for _, size := range [][2]int{{60, 15}, {80, 20}, {120, 30}} {
+		for _, list := range [][]*accounts.Account{testAccounts(), nil} {
+			view := newModel(t, list, size[0], size[1]).View()
+			for _, line := range strings.Split(view, "\n") {
+				if w := lipgloss.Width(line); w > size[0] {
+					t.Errorf("%dx%d (%d accounts): a line is %d wide:\n%s", size[0], size[1], len(list), w, line)
+					break
+				}
+			}
+		}
+	}
+}
+
+func TestDetails(t *testing.T) {
+	view := newModel(t, testAccounts(), 120, 30).View()
+	for _, want := range []string{"jane@acme.com", "github.com, gitlab.acme.com", "~/projects/work/", "~/clients/",
+		"~/.ssh/id_ed25519_work", "no passphrase", "Signing    off", "~/.config/doppel/accounts/work.gitconfig"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("details are missing %q:\n%s", want, view)
+		}
+	}
+	m, _ := press(newModel(t, testAccounts(), 120, 30), "k") // up, to the default account
+	view = m.View()
+	for _, want := range []string{"Signing    commits and tags", "~/.ssh/id_ed25519_personal.pub", "passphrase", "in agent", "outside every folder"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("default account details are missing %q:\n%s", want, view)
+		}
+	}
+	if !regexp.MustCompile(`👤 personal +DEFAULT`).MatchString(view) {
+		t.Errorf("the DEFAULT badge isn't beside the name:\n%s", view)
+	}
+}
+
+func TestNarrowTerminalTogglesDetails(t *testing.T) {
+	m := newModel(t, testAccounts(), 80, 20)
+	if strings.Contains(m.View(), "Auth key") {
+		t.Error("details shown beside the list on a narrow terminal")
+	}
+	m, _ = press(m, "tab")
+	if !strings.Contains(m.View(), "Auth key") {
+		t.Errorf("tab didn't show the details:\n%s", m.View())
+	}
+}
+
+func TestEmptyBrowser(t *testing.T) {
+	m := newModel(t, nil, 80, 20)
+	if !strings.Contains(m.View(), "No accounts yet") {
+		t.Errorf("empty view:\n%s", m.View())
+	}
+	m, _ = press(m, "e")
+	if got := m.(Model).Action(); got.Kind != Quit {
+		t.Errorf("edit with no accounts picked %+v", got)
+	}
+	m, _ = press(m, "a")
+	if got := m.(Model).Action(); got.Kind != Add || got.ID != "" {
+		t.Errorf("a picked %+v", got)
+	}
+}
+
+func TestStatusClears(t *testing.T) {
+	env := &paths.Env{Home: "/home/jane"}
+	var m tea.Model = New(Options{Env: env, Accounts: testAccounts(), Status: "✓ Added account work"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if !strings.Contains(m.View(), "✓ Added account work") || m.Init() == nil {
+		t.Fatal("status not shown, or never cleared")
+	}
+	m, _ = m.Update(clearStatusMsg{})
+	if strings.Contains(m.View(), "Added account") {
+		t.Error("status still shown after it cleared")
+	}
+}
