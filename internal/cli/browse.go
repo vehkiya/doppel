@@ -12,6 +12,8 @@ import (
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/tui"
 	"github.com/vehkiya/doppel/internal/ui"
+	"github.com/vehkiya/doppel/internal/update"
+	"github.com/vehkiya/doppel/internal/version"
 )
 
 // browse runs the account browser until the user quits. Each action leaves
@@ -23,7 +25,8 @@ func (a *app) browse() int {
 		if err != nil {
 			return a.fail(err)
 		}
-		act, err := tui.Run(tui.Options{Env: a.env, Accounts: list, KeyInfo: a.keyInfo(list), Selected: selected, Status: status})
+		act, err := tui.Run(tui.Options{Env: a.env, Accounts: list, KeyInfo: a.keyInfo(list), Selected: selected, Status: status,
+			CheckUpdate: a.updateCheck()})
 		if err != nil {
 			return a.fail(err)
 		}
@@ -33,43 +36,70 @@ func (a *app) browse() int {
 		if act.ID != "" {
 			selected = act.ID
 		}
-		status = a.runAction(act)
+		var quit bool
+		if status, quit = a.runAction(act); quit {
+			return 0
+		}
+	}
+}
+
+// updateCheck is the browser's background check for a newer release, or nil
+// when it's off: for development builds, or with DOPPEL_NO_UPDATE_CHECK set.
+func (a *app) updateCheck() func() (string, bool) {
+	if update.CheckDisabled(version.Version) {
+		return nil
+	}
+	return func() (string, bool) {
+		latest, newer, err := update.LatestCached(version.Version)
+		return latest, err == nil && newer
 	}
 }
 
 // runAction carries out one browser action. It returns a short status to
 // show when the browser opens again; anything longer (output to read,
-// warnings, errors) waits for Enter first.
-func (a *app) runAction(act tui.Action) string {
+// warnings, errors) waits for Enter first. quit ends the browser, after
+// doppel updated itself.
+func (a *app) runAction(act tui.Action) (status string, quit bool) {
 	switch act.Kind {
+	case tui.Upgrade:
+		installed, err := update.Perform(version.Version, a.stdout, false)
+		if err != nil {
+			a.fail(err)
+		}
+		if err != nil || installed == "" {
+			a.pause()
+			return "", false
+		}
+		a.successf("Updated doppel to %s. Run doppel again to use it.", installed)
+		return "", true
 	case tui.Export:
 		a.cmdExport([]string{act.ID})
 		a.pause()
-		return ""
+		return "", false
 	case tui.Test:
 		a.cmdTest([]string{act.ID})
 		a.pause()
-		return ""
+		return "", false
 	case tui.Upload:
 		a.cmdUpload([]string{act.ID})
 		a.pause()
-		return ""
+		return "", false
 	case tui.Bind:
 		folder, err := a.askFolder(act.ID)
 		if err != nil {
-			return statusOf(err.Error(), "")
+			return statusOf(err.Error(), ""), false
 		}
-		return a.captured(func() int { return a.cmdBind([]string{act.ID, folder}) })
+		return a.captured(func() int { return a.cmdBind([]string{act.ID, folder}) }), false
 	case tui.Add:
-		return a.captured(func() int { return a.addWithWizard("", writeFlags{}) })
+		return a.captured(func() int { return a.addWithWizard("", writeFlags{}) }), false
 	case tui.Edit:
-		return a.captured(func() int { return a.cmdEdit([]string{act.ID}) })
+		return a.captured(func() int { return a.cmdEdit([]string{act.ID}) }), false
 	case tui.Delete:
-		return a.captured(func() int { return a.cmdRm([]string{act.ID, "--yes"}) })
+		return a.captured(func() int { return a.cmdRm([]string{act.ID, "--yes"}) }), false
 	case tui.SetDefault:
-		return a.captured(func() int { return a.cmdDefault([]string{act.ID}) })
+		return a.captured(func() int { return a.cmdDefault([]string{act.ID}) }), false
 	}
-	return ""
+	return "", false
 }
 
 // captured runs a command, showing its output as usual, and sums it up as a

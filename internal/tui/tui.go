@@ -31,6 +31,7 @@ const (
 	Export     ActionKind = "export"
 	Upload     ActionKind = "upload"
 	Test       ActionKind = "test"
+	Upgrade    ActionKind = "upgrade"
 )
 
 // Action is the browser's result: what to do, to which account.
@@ -53,6 +54,10 @@ type Options struct {
 	KeyInfo  map[string]KeyInfo
 	Selected string // the account to start on
 	Status   string // a message to show briefly, such as the last action's result
+
+	// CheckUpdate looks for a newer doppel release in the background. It
+	// returns the latest version and whether it's newer; nil skips the check.
+	CheckUpdate func() (latest string, newer bool)
 }
 
 var (
@@ -78,7 +83,7 @@ func (i item) Description() string { return i.acc.Email }
 func (i item) FilterValue() string { return i.acc.ID + " " + i.acc.Email }
 
 type keyMap struct {
-	edit, add, del, bind, def, export, upload, test, details key.Binding
+	edit, add, del, bind, def, export, upload, test, details, upgrade key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -92,6 +97,8 @@ func newKeyMap() keyMap {
 		upload:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upload to GitHub")),
 		test:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test")),
 		details: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "details")),
+		// Enabled once the update check finds a newer release.
+		upgrade: key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update doppel"), key.WithDisabled()),
 	}
 }
 
@@ -107,9 +114,17 @@ type Model struct {
 	confirmDelete bool
 	status        string
 	quitting      bool
+	checkUpdate   func() (string, bool)
+	newRelease    string // a newer doppel release, once the check finds one
 }
 
 type clearStatusMsg struct{}
+
+// updateMsg carries the background update check's answer.
+type updateMsg struct {
+	latest string
+	newer  bool
+}
 
 // New builds the browser's model.
 func New(opts Options) Model {
@@ -135,7 +150,7 @@ func New(opts Options) Model {
 		return []key.Binding{keys.edit, keys.add}
 	}
 	l.AdditionalFullHelpKeys = func() []key.Binding {
-		return []key.Binding{keys.edit, keys.add, keys.del, keys.bind, keys.def, keys.export, keys.upload, keys.test, keys.details}
+		return []key.Binding{keys.edit, keys.add, keys.del, keys.bind, keys.def, keys.export, keys.upload, keys.test, keys.details, keys.upgrade}
 	}
 	l.KeyMap.Quit.SetKeys("q", "esc")
 	l.KeyMap.Quit.SetHelp("q/esc", "quit")
@@ -145,18 +160,26 @@ func New(opts Options) Model {
 	if info == nil {
 		info = map[string]KeyInfo{}
 	}
-	return Model{list: l, keys: keys, env: opts.Env, info: info, width: 80, height: 20, status: opts.Status}
+	return Model{list: l, keys: keys, env: opts.Env, info: info, width: 80, height: 20, status: opts.Status, checkUpdate: opts.CheckUpdate}
 }
 
 // Action returns what the user picked; a zero Action means quit.
 func (m Model) Action() Action { return m.action }
 
-// Init clears the starting status message after a moment.
+// Init starts the update check, and clears the starting status message after
+// a moment.
 func (m Model) Init() tea.Cmd {
-	if m.status == "" {
-		return nil
+	var cmds []tea.Cmd
+	if m.status != "" {
+		cmds = append(cmds, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearStatusMsg{} }))
 	}
-	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearStatusMsg{} })
+	if check := m.checkUpdate; check != nil {
+		cmds = append(cmds, func() tea.Msg {
+			latest, newer := check()
+			return updateMsg{latest, newer}
+		})
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles keys and window sizes.
@@ -164,6 +187,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case clearStatusMsg:
 		m.status = ""
+		return m, nil
+
+	case updateMsg:
+		if msg.newer {
+			m.newRelease = msg.latest
+			m.keys.upgrade.SetEnabled(true)
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -189,6 +219,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		selected := m.selected() != nil
 		switch {
+		case key.Matches(msg, m.keys.upgrade):
+			return m.pick(Upgrade)
 		case key.Matches(msg, m.keys.add):
 			return m.pick(Add)
 		case !selected:
@@ -249,6 +281,9 @@ func (m Model) View() string {
 			valueStyle.Render("An account is a Git identity, its SSH keys, and the folders where it applies.") + "\n\n" +
 			lipgloss.NewStyle().Foreground(ui.ColorCyan).Render("[a] Add your first account") + "\n" +
 			ui.Dim.Render("[q] Quit")
+		if m.newRelease != "" {
+			card += "\n\n" + m.updateNotice()
+		}
 		if m.status != "" {
 			card = statusLine(m.status) + "\n\n" + card
 		}
@@ -267,6 +302,9 @@ func (m Model) View() string {
 	}
 
 	details := m.details(acc)
+	if m.newRelease != "" {
+		details = m.updateNotice() + "\n\n" + details
+	}
 	if m.status != "" {
 		details = statusLine(m.status) + "\n\n" + details
 	}
@@ -279,10 +317,19 @@ func (m Model) View() string {
 		head := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorCyan).Render("⇥ Tab to return to the list") + "\n\n"
 		return detailStyle.Width(m.width - 4).MaxHeight(height).Render(head + m.details(acc))
 	}
+	var notes []string
 	if m.status != "" {
-		return lipgloss.JoinVertical(lipgloss.Left, m.list.View(), "  "+statusLine(m.status))
+		notes = append(notes, "  "+statusLine(m.status))
 	}
-	return m.list.View()
+	if m.newRelease != "" {
+		notes = append(notes, "  "+m.updateNotice())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, append([]string{m.list.View()}, notes...)...)
+}
+
+// updateNotice tells the user a newer doppel is out.
+func (m Model) updateNotice() string {
+	return ui.BadgeAccent.Render("UPDATE") + " " + lipgloss.NewStyle().Foreground(ui.ColorCyan).Render("doppel "+m.newRelease+" is available · U to update")
 }
 
 // details renders one account's settings. Long values get lines of their

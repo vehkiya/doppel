@@ -164,3 +164,62 @@ func TestStatusClears(t *testing.T) {
 		t.Error("status still shown after it cleared")
 	}
 }
+
+func TestUpdateNotice(t *testing.T) {
+	checked := false
+	env := &paths.Env{Home: "/home/jane"}
+	var m tea.Model = New(Options{Env: env, Accounts: testAccounts(), CheckUpdate: func() (string, bool) {
+		checked = true
+		return "v9.9.9", true
+	}})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Before the check answers, U does nothing.
+	if m, _ := press(m, "U"); m.(Model).Action().Kind != Quit {
+		t.Error("U picked an action before any update was found")
+	}
+	// The check runs in the background, through Init's command.
+	for _, msg := range runAll(m.Init()) {
+		m, _ = m.Update(msg)
+	}
+	if !checked {
+		t.Fatal("the update check didn't run")
+	}
+	if !strings.Contains(m.View(), "doppel v9.9.9 is available") {
+		t.Errorf("no update notice:\n%s", m.View())
+	}
+	if m, _ := press(m, "U"); m.(Model).Action().Kind != Upgrade {
+		t.Error("U didn't pick the upgrade")
+	}
+
+	// No newer release: no notice, and U stays off.
+	m = New(Options{Env: env, Accounts: testAccounts(), CheckUpdate: func() (string, bool) { return "v0.1.0", false }})
+	for _, msg := range runAll(m.Init()) {
+		m, _ = m.Update(msg)
+	}
+	if strings.Contains(m.View(), "is available") {
+		t.Error("an update notice without a newer release")
+	}
+	if m, _ := press(m, "U"); m.(Model).Action().Kind != Quit {
+		t.Error("U picked an action without a newer release")
+	}
+}
+
+// runAll runs a command and any batch inside it, returning their messages.
+func runAll(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		var out []tea.Msg
+		for _, c := range msg {
+			out = append(out, runAll(c)...)
+		}
+		return out
+	case nil:
+		return nil
+	default:
+		return []tea.Msg{msg}
+	}
+}

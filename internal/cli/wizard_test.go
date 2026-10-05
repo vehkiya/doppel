@@ -160,19 +160,19 @@ func TestBrowserActions(t *testing.T) {
 	s.tty = true
 
 	a := s.newApp(s.Home)
-	if got := a.runAction(tui.Action{Kind: tui.SetDefault, ID: "work"}); got != "✓ work is now the default account" {
+	if got, quit := a.runAction(tui.Action{Kind: tui.SetDefault, ID: "work"}); got != "✓ work is now the default account" || quit {
 		t.Errorf("default: status %q", got)
 	}
 
 	s.stdin = script("~/projects/work", "") // the folder, then Enter after the warning that it doesn't exist yet
 	a = s.newApp(s.Home)
-	if got := a.runAction(tui.Action{Kind: tui.Bind, ID: "work"}); got != "✓ Bound to work: ~/projects/work/" {
+	if got, quit := a.runAction(tui.Action{Kind: tui.Bind, ID: "work"}); got != "✓ Bound to work: ~/projects/work/" || quit {
 		t.Errorf("bind: status %q", got)
 	}
 
 	s.stdin = script("1") // the new default after deleting work: personal
 	a = s.newApp(s.Home)
-	if got := a.runAction(tui.Action{Kind: tui.Delete, ID: "work"}); got != "✓ Deleted account work" {
+	if got, quit := a.runAction(tui.Action{Kind: tui.Delete, ID: "work"}); got != "✓ Deleted account work" || quit {
 		t.Errorf("delete: status %q", got)
 	}
 	if acc := loadAccount(t, s, "personal"); !acc.Default {
