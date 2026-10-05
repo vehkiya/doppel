@@ -109,7 +109,11 @@ func TestSymlinkedHomeDirectory(t *testing.T) {
 
 	s.addAccount("personal", "jane@personal.dev")
 	s.addAccount("work", "jane@acme.com", "--folder", "~/work")
-	if !strings.Contains(s.Read("real/.config/doppel/index.gitconfig"), `[includeIf "gitdir:~/work/"]`) {
+	condition := "gitdir:"
+	if s.Env().CaseInsensitive() {
+		condition = "gitdir/i:" // macOS
+	}
+	if !strings.Contains(s.Read("real/.config/doppel/index.gitconfig"), `[includeIf "`+condition+`~/work/"]`) {
 		t.Errorf("folder not stored with ~/:\n%s", s.Read("real/.config/doppel/index.gitconfig"))
 	}
 	repo := s.GitInit("real/work/api")

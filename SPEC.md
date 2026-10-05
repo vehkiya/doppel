@@ -364,7 +364,10 @@ Every account file sets every setting doppel manages, including a "reset" value 
 
 ### 6.8 Distribution
 
-- `go install github.com/vehkiya/doppel@latest`, plus GitHub release binaries with signed checksums and build provenance, reusing sshx's workflows.
+- `go install github.com/vehkiya/doppel@latest`, plus GitHub release binaries for Linux and macOS (amd64 and arm64), adapted from sshx's workflows.
+  - **Validation:** every PR is linted and tested on Linux, and tested on macOS (for `gitdir/i:` and its case-insensitive filesystem).
+  - **Releases:** every merge to `main` that changes the version gets a release. The version comes from Conventional Commits: `feat` bumps the minor version, anything else the patch, and `!` or `BREAKING CHANGE` the major.
+  - **Verification:** releases carry SHA-256 checksums and GitHub build provenance (`gh attestation verify`). Signed checksums, like sshx's, come with self-update, which is what needs them.
 - configsh's `build-tools.sh` installs doppel, and `.zshrc` adds `alias dop="doppel"`.
 - Cheatsheet section 8 is rewritten around doppel.
 

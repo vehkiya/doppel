@@ -197,11 +197,12 @@ func ResolveExisting(p string) (string, bool) {
 }
 
 // FolderContains reports whether path is folder itself or lies inside it.
-// folder is in stored form (ending in "/"); path is an absolute path with
-// symlinks resolved.
+// folder is in stored form (ending in "/"); path is absolute. Symlinks are
+// resolved on both sides, so they compare as Git compares them (on macOS,
+// even /home is a symlink).
 func (e *Env) FolderContains(folder, path string) bool {
 	f := strings.TrimSuffix(e.real(folder), "/") + "/"
-	p := strings.TrimSuffix(filepath.Clean(path), "/") + "/"
+	p := strings.TrimSuffix(e.real(path), "/") + "/"
 	if e.CaseInsensitive() {
 		f, p = strings.ToLower(f), strings.ToLower(p)
 	}
