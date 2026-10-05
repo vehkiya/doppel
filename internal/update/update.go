@@ -47,7 +47,7 @@ const (
 // one before switching the secret: installed binaries only trust the keys
 // they were built with.
 var TrustedKeys = []string{
-	"ujWaKs2EU0xvq1tFtYyOmuVJxYJhYyc0/BxqGk+Yw5w=",
+	"8X0lpZPfUxaAOalCYMGbqNR3GqRayJqlm2Wnnw9m1C8=",
 }
 
 // releasesAPIURL and executablePath can be swapped in tests.

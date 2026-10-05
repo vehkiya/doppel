@@ -33,7 +33,7 @@ Each release's `checksums.txt` is signed with the doppel release key:
 
 ```text
 -----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAujWaKs2EU0xvq1tFtYyOmuVJxYJhYyc0/BxqGk+Yw5w=
+MCowBQYDK2VwAyEA8X0lpZPfUxaAOalCYMGbqNR3GqRayJqlm2Wnnw9m1C8=
 -----END PUBLIC KEY-----
 ```
 
