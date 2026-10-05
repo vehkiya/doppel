@@ -4,14 +4,14 @@ import "github.com/charmbracelet/lipgloss"
 
 // Text styles for command output.
 var (
-	Title  = lipgloss.NewStyle().Bold(true).Foreground(colorCoral)
-	OK     = lipgloss.NewStyle().Foreground(colorGreen)
-	Warn   = lipgloss.NewStyle().Foreground(colorAmber)
-	Error  = lipgloss.NewStyle().Foreground(colorRed)
-	Dim    = lipgloss.NewStyle().Foreground(colorDim)
-	Label  = lipgloss.NewStyle().Foreground(colorGray)
-	Accent = lipgloss.NewStyle().Bold(true).Foreground(colorCyan)
-	Star   = lipgloss.NewStyle().Foreground(colorAmber)
+	Title  = lipgloss.NewStyle().Bold(true).Foreground(ColorCoral)
+	OK     = lipgloss.NewStyle().Foreground(ColorGreen)
+	Warn   = lipgloss.NewStyle().Foreground(ColorAmber)
+	Error  = lipgloss.NewStyle().Foreground(ColorRed)
+	Dim    = lipgloss.NewStyle().Foreground(ColorDim)
+	Label  = lipgloss.NewStyle().Foreground(ColorGray)
+	Accent = lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
+	Star   = lipgloss.NewStyle().Foreground(ColorAmber)
 )
 
 // lineStyle colors a diff line by its kind. Tabs are kept as they are, so
@@ -20,11 +20,11 @@ func lineStyle(kind byte) lipgloss.Style {
 	style := lipgloss.NewStyle().TabWidth(lipgloss.NoTabConversion)
 	switch kind {
 	case '+':
-		return style.Foreground(colorGreen)
+		return style.Foreground(ColorGreen)
 	case '-':
-		return style.Foreground(colorRed)
+		return style.Foreground(ColorRed)
 	case '@':
-		return style.Foreground(colorCyan)
+		return style.Foreground(ColorCyan)
 	}
 	return style
 }

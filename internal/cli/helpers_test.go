@@ -36,15 +36,24 @@ func (s *sandbox) run(args ...string) int {
 
 func (s *sandbox) runIn(cwd string, args ...string) int {
 	s.T.Helper()
+	return s.newApp(cwd).run(args)
+}
+
+// newApp builds the app a command runs with: the sandbox's environment,
+// s.stdin as input, output captured, and stand-ins for key generation and
+// the clipboard.
+func (s *sandbox) newApp(cwd string) *app {
+	s.T.Helper()
 	s.stdout.Reset()
 	s.stderr.Reset()
-	a := &app{
+	return &app{
 		env:         s.Env(),
 		cwd:         cwd,
 		stdin:       bufio.NewReader(strings.NewReader(s.stdin)),
 		stdout:      &s.stdout,
 		stderr:      &s.stderr,
 		interactive: s.tty,
+		accessible:  true,
 		// Generated keys get an empty passphrase, as there's nobody to type one.
 		generate: func(path, comment string) error {
 			empty := ""
@@ -55,7 +64,6 @@ func (s *sandbox) runIn(cwd string, args ...string) int {
 			return nil
 		},
 	}
-	return a.run(args)
 }
 
 // mustRun runs doppel and fails the test unless it exits 0. It returns stdout.

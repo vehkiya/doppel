@@ -19,7 +19,7 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`. `plan` and `keys` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan` and `keys` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
 * Export only what another package needs. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
@@ -49,6 +49,13 @@ Before committing, all of the following must pass cleanly:
 * Because commands only stage changes, `--dry-run` shows exactly what a real run would write. Never write a file outside a plan.
 * doppel never overwrites or deletes key files.
 
+### 2.3a Interactive flows
+* A wizard is a sequence of small Huh forms, with ordinary Go deciding which step comes next. Huh's accessible mode ignores hidden fields, so conditional fields inside one form would break it.
+* Run every form through `app.runForm`, which applies the theme and switches to accessible mode for `$ACCESSIBLE` and for tests.
+* Validate a prefilled field with `keepIfEmpty`. In accessible mode an empty answer means "keep the value", and Huh validates the typed text before falling back to it.
+* Commands only ask when they have no flags and a terminal (`onlyWriteFlags`). Scripts must never get a question.
+* The browser only picks an action. `cli` carries it out with the same code as the matching command, so the browser and the command line can't drift apart.
+
 ### 2.4 Design system
 Keep styling consistent with sshx's palette (`internal/ui/palette.go`):
 * **Brand / Accent:** Charm Purple (`#7D56F4`)
@@ -61,4 +68,6 @@ Keep styling consistent with sshx's palette (`internal/ui/palette.go`):
 ### 2.5 Testing
 * Tests never touch the real home directory, Git config or ssh-agent. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` and `SSH_*` variable that could leak in a developer's own setup or open a passphrase dialog.
 * Make test keys with `Sandbox.Key` (real `ssh-keygen`, so signatures really verify). Never contact a real host: stand in for `ssh` with `Sandbox.FakeSSH`.
+* Test wizards by setting `s.tty = true` and scripting `s.stdin` with `answers(...)`, one line per prompt (empty for the default). The sandbox runs forms in accessible mode.
+* Test the browser through its model (`New`, `Update`, `View`), not a real terminal. Every view must fit 60, 80 and 120 columns.
 * Prefer end-to-end tests that run doppel and then ask real `git` what applies in a repo, over tests of internal functions.

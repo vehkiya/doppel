@@ -52,7 +52,7 @@ func TestWhoamiWithoutAccounts(t *testing.T) {
 	s := newSandbox(t)
 	s.GitInit("repo")
 	out := s.mustRun("whoami", "repo")
-	if !strings.Contains(out, "none") || !strings.Contains(out, "doppel bind") {
+	if !strings.Contains(out, "none") || !strings.Contains(out, "doppel bind") || !strings.Contains(out, "Auth key  your default SSH keys") {
 		t.Errorf("whoami with no accounts:\n%s", out)
 	}
 }

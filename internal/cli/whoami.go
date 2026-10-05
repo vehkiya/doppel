@@ -98,7 +98,7 @@ func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offlin
 	switch ssh := value(accounts.KeySSHCommand); {
 	case acc != nil && acc.AuthKey != "" && ssh == accounts.SSHCommand(acc.AuthKey):
 		a.row("Auth key", acc.AuthKey+ui.Dim.Render(a.keyStatus(acc.AuthKey)))
-	case ssh == "ssh":
+	case ssh == "ssh" || ssh == "":
 		a.row("Auth key", "your default SSH keys")
 	default:
 		a.row("SSH", ssh)
