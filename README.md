@@ -2,7 +2,7 @@
 
 [![Release](https://github.com/vehkiya/doppel/actions/workflows/cd.yml/badge.svg)](https://github.com/vehkiya/doppel/actions/workflows/cd.yml)
 [![CodeQL Analysis](https://github.com/vehkiya/doppel/actions/workflows/codeql.yml/badge.svg)](https://github.com/vehkiya/doppel/actions/workflows/codeql.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/vehkiya/doppel)](https://goreportcard.com/report/github.com/vehkiya/doppel)
+[![Linted with golangci-lint](https://img.shields.io/badge/linted%20with-golangci--lint-00ADD8?logo=go&logoColor=white)](https://golangci-lint.run)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **doppel** manages several Git accounts on one machine. Repos under `~/projects/work` commit as your work identity, push with your work SSH key and sign with your work signing key. Everything else uses your personal account. You never switch anything by hand.
