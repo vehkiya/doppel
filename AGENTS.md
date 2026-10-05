@@ -35,7 +35,7 @@ Before committing, all of the following must pass cleanly:
   * When removing the block, check whether other keys share its section: Git adds new `include.path` lines to the last `[include]` section, which is doppel's.
 * **Folder rules go from broad to specific** (`renderIndex`), because Git lets the last match win.
 * **Folders are stored by their real path**, `~/`-shortened and ending in `/` (`NormalizeFolder`). Git matches repos by their real path, and the trailing `/` stops `~/projects/work` from matching `~/projects/workshop`.
-* **Only `whoami` outside a repo matches folders itself.** Everywhere else, ask Git (`doppel.account`) which account applies.
+* **Ask Git which account applies** (`doppel.account`). Only `whoami` applies the folder rules itself, and only where Git can't answer, because the repo doesn't exist yet: a clone target, or a new repo inside a folder that belongs to an enclosing repo.
 
 ### 2.3 Single write path
 * Every file change goes through a `Plan`: stage, then `Apply`.
