@@ -82,12 +82,21 @@ func includesIndex(env *Env, configPath string) (bool, error) {
 	return false, nil
 }
 
-// ensureInclude appends doppel's include block to the end of the global Git
-// config unless the file already includes the index. It's appended as text:
-// `git config --add` would put it inside an existing [include] section,
-// which may not be last.
+// ensureInclude makes sure the global Git config includes doppel's index
+// once, at the end of the file Git reads last. An include left in another
+// global file, such as ~/.config/git/config from before ~/.gitconfig
+// existed, is moved. The block is appended as text: `git config --add`
+// would put it inside an existing [include] section, which may not be last.
 func ensureInclude(env *Env, plan *Plan) error {
 	path := env.GlobalConfigPath()
+	for _, other := range env.GlobalConfigFiles() {
+		if other == path {
+			continue
+		}
+		if _, err := removeIncludeFrom(env, plan, other); err != nil {
+			return err
+		}
+	}
 	staged, err := plan.Stage(path)
 	if err != nil {
 		return err
@@ -106,11 +115,25 @@ func ensureInclude(env *Env, plan *Plan) error {
 	return plan.SetContent(path, []byte(text+includeBlock(env)))
 }
 
-// removeInclude takes doppel's include out of the global Git config: first
-// the exact block doppel appended, then any include of the index that was
-// moved or reformatted since. It reports whether anything was removed.
+// removeInclude takes doppel's include out of every global Git config file.
+// It reports whether anything was removed.
 func removeInclude(env *Env, plan *Plan) (bool, error) {
-	path := env.GlobalConfigPath()
+	removed := false
+	for _, path := range env.GlobalConfigFiles() {
+		ok, err := removeIncludeFrom(env, plan, path)
+		if err != nil {
+			return false, err
+		}
+		removed = removed || ok
+	}
+	return removed, nil
+}
+
+// removeIncludeFrom takes doppel's include out of one Git config file: the
+// block doppel appended as text when it's still intact, then, through Git,
+// any include of the index that was moved, reformatted or shares its
+// section with other keys.
+func removeIncludeFrom(env *Env, plan *Plan, path string) (bool, error) {
 	data, exists, err := plan.Content(path)
 	if err != nil || !exists {
 		return false, err
@@ -118,11 +141,17 @@ func removeInclude(env *Env, plan *Plan) (bool, error) {
 	removed := false
 	lines := strings.Split(string(data), "\n")
 	for k := 0; k+2 < len(lines); k++ {
-		if lines[k] != includeComment || strings.TrimSpace(lines[k+1]) != "[include]" || !isIndexPathLine(env, lines[k+2]) {
+		if strings.TrimSpace(lines[k]) != includeComment || strings.TrimSpace(lines[k+1]) != "[include]" || !isIndexPathLine(env, lines[k+2]) {
 			continue
 		}
 		start, end := k, k+3
-		if start > 0 && strings.TrimSpace(lines[start-1]) == "" {
+		if !sectionEndsAt(lines, end) {
+			// `git config --add include.path` puts new paths in the last
+			// [include] section, which is doppel's. Removing the whole block
+			// would leave those keys under the section above it, so only the
+			// comment goes here and Git removes doppel's path below.
+			start, end = k, k+1
+		} else if start > 0 && strings.TrimSpace(lines[start-1]) == "" {
 			start-- // the blank line ensureInclude added before the block
 		}
 		lines = append(lines[:start], lines[end:]...)
@@ -153,6 +182,24 @@ func removeInclude(env *Env, plan *Plan) (bool, error) {
 		removed = true
 	}
 	return removed, nil
+}
+
+// sectionEndsAt reports whether the config section running up to lines[i]
+// has no more keys: only blank lines and comments come before the next
+// section header or the end of the file.
+func sectionEndsAt(lines []string, i int) bool {
+	for ; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		switch {
+		case line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";"):
+			continue
+		case strings.HasPrefix(line, "["):
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // isIndexPathLine reports whether a config line is `path = <doppel's index>`.

@@ -259,6 +259,11 @@ func (a *Account) validate() error {
 	if a.GitHubUser != "" && !githubUserPattern.MatchString(a.GitHubUser) {
 		return fmt.Errorf("account %s: %q isn't a valid GitHub username", a.ID, a.GitHubUser)
 	}
+	for _, f := range a.Folders {
+		if err := validateFolder(f); err != nil {
+			return fmt.Errorf("account %s: folder %q: %w (fix doppel.folder in the account file, or run `doppel unbind`)", a.ID, f, err)
+		}
+	}
 	return nil
 }
 

@@ -128,8 +128,10 @@ func (p *Plan) Changes() ([]fileChange, error) {
 	return changes, nil
 }
 
-// Apply writes every change, first keeping a backup of each file it replaces
-// or removes.
+// Apply writes every change. It backs up every file it will replace or
+// remove before touching any of them, then writes files in staging order,
+// and removes files last. If something fails partway, what's left over is
+// at worst an extra file, never a rule pointing at a file that's gone.
 func (p *Plan) Apply() ([]fileChange, error) {
 	changes, err := p.Changes()
 	if err != nil {
@@ -141,10 +143,9 @@ func (p *Plan) Apply() ([]fileChange, error) {
 				return nil, fmt.Errorf("backing up %s: %w", c.Path, err)
 			}
 		}
+	}
+	for _, c := range changes {
 		if !c.Exists {
-			if err := os.Remove(c.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, err
-			}
 			continue
 		}
 		mode := os.FileMode(0644)
@@ -152,6 +153,14 @@ func (p *Plan) Apply() ([]fileChange, error) {
 			mode = info.Mode().Perm()
 		}
 		if err := AtomicWrite(c.Path, c.New, mode); err != nil {
+			return nil, err
+		}
+	}
+	for _, c := range changes {
+		if c.Exists {
+			continue
+		}
+		if err := os.Remove(c.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
 	}
@@ -168,13 +177,32 @@ func BackupPath(path string) string {
 	return filepath.Join(filepath.Dir(path), name+".doppel.bak")
 }
 
+// symlinkTarget returns the file a write to path should replace: path
+// itself, or the file a symlink at path points to. That includes a dangling
+// link, such as a dotfiles manager's link whose target doesn't exist yet,
+// so the link is kept rather than replaced by a regular file.
+func symlinkTarget(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	for range 40 { // the same limit the kernel puts on a chain of links
+		target, err := os.Readlink(path)
+		if err != nil {
+			return path
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = target
+	}
+	return path
+}
+
 // AtomicWrite writes data to targetPath through a temporary file and a
 // rename, so the file is never left half-written. When targetPath is a
 // symlink, the file it points to is replaced and the link is kept.
 func AtomicWrite(targetPath string, data []byte, perm os.FileMode) error {
-	if resolved, err := filepath.EvalSymlinks(targetPath); err == nil {
-		targetPath = resolved
-	}
+	targetPath = symlinkTarget(targetPath)
 
 	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {

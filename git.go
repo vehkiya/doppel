@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -38,11 +39,25 @@ func gitExitCode(err error) int {
 	return -1
 }
 
-// runGit runs git with args in dir ("" for the current directory) and
-// returns its standard output.
+// runGit runs git with args in dir ("" for the current directory), with the
+// user's own Git config in effect, and returns its standard output.
 func runGit(dir string, args ...string) (string, error) {
+	return runGitEnv(dir, nil, args...)
+}
+
+// runGitAlone runs git without the user's global and system config. doppel
+// uses it for commands that only touch one named file, so a broken or
+// unusual global config can neither stop doppel nor change what it writes.
+func runGitAlone(args ...string) (string, error) {
+	return runGitEnv("", []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"}, args...)
+}
+
+func runGitEnv(dir string, env []string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...) //nolint:gosec // fixed binary; arguments are built by doppel
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -57,7 +72,7 @@ func runGit(dir string, args ...string) (string, error) {
 
 // configFile runs `git config --file path args...`.
 func configFile(path string, args ...string) error {
-	_, err := runGit("", append([]string{"config", "--file", path}, args...)...)
+	_, err := runGitAlone(append([]string{"config", "--file", path}, args...)...)
 	return err
 }
 
@@ -104,7 +119,7 @@ func readConfigFile(path string) (map[string][]string, error) {
 	if !fileExists(path) {
 		return values, nil
 	}
-	out, err := runGit("", "config", "--file", path, "--list", "--null")
+	out, err := runGitAlone("config", "--file", path, "--list", "--null")
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +145,7 @@ func parseGitVersion(out string) (major, minor int, ok bool) {
 
 // checkGit fails when git is missing or older than doppel supports.
 func checkGit() error {
-	out, err := runGit("", "version")
+	out, err := runGitAlone("version")
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return fmt.Errorf("git not found: doppel needs Git %d.%d or newer", minGitMajor, minGitMinor)

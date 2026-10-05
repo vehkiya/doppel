@@ -12,7 +12,8 @@ import (
 // Env holds the locations doppel reads and writes. Tests point HOME and
 // XDG_CONFIG_HOME at a sandbox.
 type Env struct {
-	Home      string // the user's home directory
+	Home      string // the user's home directory, as $HOME names it
+	RealHome  string // Home with symlinks resolved
 	ConfigDir string // $XDG_CONFIG_HOME, or ~/.config
 	GOOS      string
 }
@@ -27,7 +28,11 @@ func loadEnv() (*Env, error) {
 	if !filepath.IsAbs(configDir) {
 		configDir = filepath.Join(home, ".config")
 	}
-	return &Env{Home: home, ConfigDir: configDir, GOOS: runtime.GOOS}, nil
+	realHome := home
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		realHome = resolved
+	}
+	return &Env{Home: home, RealHome: realHome, ConfigDir: configDir, GOOS: runtime.GOOS}, nil
 }
 
 // DoppelDir is where doppel keeps its own files.
@@ -48,7 +53,7 @@ func (e *Env) IndexPath() string { return filepath.Join(e.DoppelDir(), "index.gi
 // the file `git config --global` writes to, which Git also reads last.
 func (e *Env) GlobalConfigPath() string {
 	if p := os.Getenv("GIT_CONFIG_GLOBAL"); p != "" {
-		return e.Expand(p)
+		return p // used exactly as Git uses it, without expanding "~"
 	}
 	home := filepath.Join(e.Home, ".gitconfig")
 	if fileExists(home) {
@@ -59,6 +64,17 @@ func (e *Env) GlobalConfigPath() string {
 		return xdg
 	}
 	return home
+}
+
+// GlobalConfigFiles lists every global config file Git reads, in the order
+// it reads them. doppel's include belongs only in GlobalConfigPath, but an
+// earlier one can be left in another file, for instance when ~/.gitconfig
+// is created after doppel added its include to ~/.config/git/config.
+func (e *Env) GlobalConfigFiles() []string {
+	if p := os.Getenv("GIT_CONFIG_GLOBAL"); p != "" {
+		return []string{p}
+	}
+	return []string{filepath.Join(e.ConfigDir, "git", "config"), filepath.Join(e.Home, ".gitconfig")}
 }
 
 // CaseInsensitive reports whether folder rules should ignore case, as macOS
@@ -76,20 +92,34 @@ func (e *Env) Expand(path string) string {
 	return path
 }
 
-// Shorten rewrites a path inside the home directory to the "~/" form Git expands.
+// Shorten rewrites a path inside the home directory to the "~/" form Git
+// expands. A path under the home directory's real location is shortened
+// too: Git matches "~/" folder rules through a symlinked home directory.
 func (e *Env) Shorten(path string) string {
-	if path == e.Home {
-		return "~"
-	}
-	if strings.HasPrefix(path, e.Home+"/") {
-		return "~" + path[len(e.Home):]
+	for _, home := range []string{e.Home, e.RealHome} {
+		if home == "" {
+			continue
+		}
+		if path == home {
+			return "~"
+		}
+		if strings.HasPrefix(path, home+"/") {
+			return "~" + path[len(home):]
+		}
 	}
 	return path
 }
 
+// real expands "~/" and resolves symlinks in as much of path as exists, so
+// paths written through different symlinks compare equal.
+func (e *Env) real(path string) string {
+	resolved, _ := resolveExisting(filepath.Clean(e.Expand(path)))
+	return resolved
+}
+
 // SamePath reports whether two paths (either may use "~/") name the same location.
 func (e *Env) SamePath(a, b string) bool {
-	a, b = filepath.Clean(e.Expand(a)), filepath.Clean(e.Expand(b))
+	a, b = e.real(a), e.real(b)
 	if e.CaseInsensitive() {
 		return strings.EqualFold(a, b)
 	}
@@ -117,14 +147,30 @@ func (e *Env) NormalizeFolder(input, cwd string) (folder string, exists bool, er
 			return "", false, fmt.Errorf("%s is a file, not a folder", input)
 		}
 	}
-	if strings.ContainsAny(real, "*?[\\\"\n") {
-		return "", false, fmt.Errorf("%s: folder paths can't contain *, ?, [, \\ or \" because Git would read them as a pattern", input)
-	}
 	folder = e.Shorten(real)
 	if !strings.HasSuffix(folder, "/") {
 		folder += "/"
 	}
+	if err := validateFolder(folder); err != nil {
+		return "", false, fmt.Errorf("%s: %w", input, err)
+	}
 	return folder, exists, nil
+}
+
+// validateFolder checks a folder in stored form before it's written into a
+// folder rule. Hand-edited account files go through it too: a bad value
+// would make the generated index unreadable to Git, or match folders
+// anywhere on disk.
+func validateFolder(folder string) error {
+	switch {
+	case !strings.HasPrefix(folder, "/") && !strings.HasPrefix(folder, "~/"):
+		return errors.New("folders must be absolute paths or start with ~/; Git would match a relative one anywhere on disk")
+	case !strings.HasSuffix(folder, "/"):
+		return errors.New("folders must end with /")
+	case strings.ContainsAny(folder, "*?[\\\"\n"):
+		return errors.New("folder paths can't contain *, ?, [, \\, \" or line breaks, because Git would read them as a pattern")
+	}
+	return nil
 }
 
 // resolveExisting resolves symlinks in p. When p doesn't exist, it resolves
@@ -148,9 +194,10 @@ func resolveExisting(p string) (string, bool) {
 }
 
 // FolderContains reports whether path is folder itself or lies inside it.
-// folder is in stored form (ending in "/"); path is an absolute path.
+// folder is in stored form (ending in "/"); path is an absolute path with
+// symlinks resolved.
 func (e *Env) FolderContains(folder, path string) bool {
-	f := e.Expand(folder)
+	f := strings.TrimSuffix(e.real(folder), "/") + "/"
 	p := strings.TrimSuffix(filepath.Clean(path), "/") + "/"
 	if e.CaseInsensitive() {
 		f, p = strings.ToLower(f), strings.ToLower(p)

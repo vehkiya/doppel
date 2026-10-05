@@ -32,18 +32,16 @@ func (a *app) cmdWhoami(args []string) int {
 		return a.fail(err)
 	}
 
-	// Ask Git from the nearest folder that exists, so a path that's about to
-	// be created (say, a clone target) is still answered.
+	// A path that doesn't exist yet, such as a clone target, is answered by
+	// the folder rules: asking Git from an existing parent would describe
+	// whatever repo encloses it, not the new repo.
 	dir := filepath.Clean(path)
-	for {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() { //nolint:gosec // the user's own path argument; only its existence is read
-			break
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() { //nolint:gosec // the user's own path argument; only its type is read
+		if err == nil {
+			dir = filepath.Dir(dir) // a file: describe the repo it's in
+		} else {
+			return a.whoamiOutsideRepo(accounts, path)
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
 	gitDir, err := runGit(dir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
@@ -97,6 +95,17 @@ func (a *app) whoamiInRepo(accounts []*Account, path, gitDir string) int {
 		a.row("Signing", fmt.Sprintf("%s · %s", signingScope(value(keyCommitSign), value(keyTagSign)), value(keySigningKey)))
 	} else {
 		a.row("Signing", "off")
+	}
+
+	// path may be a plain folder inside an enclosing repo, such as a home
+	// directory managed with yadm. A repo created there gets its own
+	// account, so say so when that differs from the enclosing repo's.
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		if top, err := filepath.EvalSymlinks(repo); err == nil && real != top {
+			if newID, rule := a.folderRule(accounts, real); newID != id && newID != "" {
+				a.row("New repos", styleAccent.Render(newID)+styleDim.Render(" ("+rule+")"))
+			}
+		}
 	}
 
 	if id == "" {
@@ -173,27 +182,37 @@ func (a *app) isAccountFile(origin string) bool {
 // an existing repo.
 func (a *app) whoamiOutsideRepo(accounts []*Account, path string) int {
 	real, _ := resolveExisting(filepath.Clean(path))
-	var match *Account
-	best := ""
-	for _, acc := range accounts {
-		if f, ok := a.deepestFolder(acc.Folders, real); ok && (match == nil || a.env.folderDepth(f) > a.env.folderDepth(best)) {
-			match, best = acc, f
-		}
-	}
 	note := " (not a Git repository)"
 	if _, err := os.Stat(path); err != nil { //nolint:gosec // the user's own path argument; only its existence is read
 		note = " (doesn't exist yet)"
 	}
 	a.row("Path", a.env.Shorten(real)+styleDim.Render(note))
-	switch {
-	case match != nil:
-		a.row("New repos", styleAccent.Render(match.ID)+styleDim.Render(" (folder "+best+")"))
-	case defaultAccount(accounts) != nil:
-		a.row("New repos", styleAccent.Render(defaultAccount(accounts).ID)+styleDim.Render(" (default account)"))
-	default:
+	if id, rule := a.folderRule(accounts, real); id != "" {
+		a.row("New repos", styleAccent.Render(id)+styleDim.Render(" ("+rule+")"))
+	} else {
 		a.row("New repos", styleWarn.Render("no doppel account")+styleDim.Render(" (your global Git config applies)"))
 	}
 	return 0
+}
+
+// folderRule returns the account a new repo at path (a real path) would get,
+// and the rule that picks it: the most specific bound folder, or else the
+// default account. It returns "" when no account applies.
+func (a *app) folderRule(accounts []*Account, path string) (id, rule string) {
+	var match *Account
+	best := ""
+	for _, acc := range accounts {
+		if f, ok := a.deepestFolder(acc.Folders, path); ok && (match == nil || a.env.folderDepth(f) > a.env.folderDepth(best)) {
+			match, best = acc, f
+		}
+	}
+	if match != nil {
+		return match.ID, "folder " + best
+	}
+	if def := defaultAccount(accounts); def != nil {
+		return def.ID, "default account"
+	}
+	return "", ""
 }
 
 func (a *app) row(label, value string) {

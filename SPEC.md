@@ -70,11 +70,12 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R2.4** Repos outside every folder use the default account. With no default account, Git's own global config applies as before.
 - **R2.5** Paths:
   - Stored by their real location, with symlinks resolved. Git matches a repo by its real path, so a rule written with a symlinked folder path only matches when the shell happens to be in that symlinked path. *(Verified on Git 2.56.)*
-  - Stored with `~` when under the home directory.
+  - Stored with `~` when under the home directory, including a home directory reached through a symlink, since Git matches `~/` rules through it. *(Verified on Git 2.56.)*
   - Normalized to an absolute path with a trailing `/`, so `~/projects/work` never matches `~/projects/workshop`.
   - Matched case-insensitively on macOS.
   - A folder that doesn't exist yet is allowed, with a warning. Its nearest existing parent is resolved instead.
-  - Paths containing glob characters (`*`, `?`, `[`), `\` or `"` are rejected, because Git would read them as a pattern.
+  - Paths containing glob characters (`*`, `?`, `[`), `\`, `"` or line breaks are rejected, because Git would read them as a pattern.
+  - Folders read back from hand-edited account files are checked the same way, and must be absolute or start with `~/`, before the folder rules are written. A bad value would make the rules unreadable to Git, or match folders anywhere on disk.
 - **R2.6** Binding a folder that already belongs to another account asks before moving it.
 
 ### R3. Auth key
@@ -115,7 +116,9 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - the login check result for the repo's remote host
 - **R6.2** It asks Git which account applies (each account file carries `doppel.account`), so the result always matches what Git will actually do. It never re-implements folder matching.
 - **R6.3** It warns when a value in effect doesn't come from doppel, for example a `--local` override or a global setting placed after doppel's include. It shows where each value comes from, using `git config --show-origin`.
-- **R6.4** Outside any repo, it shows which account a repo created there would get. Git can only answer this for an existing repo, so here doppel applies the same folder rules itself. *(Verified: pointing `GIT_DIR` at a `.git` that doesn't exist yet makes Git skip the folder rules.)*
+- **R6.4** Outside any repo, it shows which account a repo created there would get. Git can only answer this for an existing repo, so here doppel applies the same folder rules itself.
+  - This also covers a path that doesn't exist yet, such as a clone target.
+  - For a plain folder inside an enclosing repo, such as a home directory managed with yadm, it shows the enclosing repo's account, plus the account a new repo there would get when that differs. *(Verified: pointing `GIT_DIR` at a `.git` that doesn't exist yet makes Git skip the folder rules.)*
 
 ### R7. `doctor`
 
@@ -136,10 +139,14 @@ Checks every account and prints how to fix each problem it finds:
   - the marked block in `allowed_signers`
 
   Everything else lives in doppel's own directory.
-- **R8.2** Every write is atomic (a temporary file in the same directory, then a rename), preserves the file's mode and symlinks, and keeps a hidden backup of the previous version alongside it (`.gitconfig.doppel.bak`), like sshx.
+- **R8.1a** The include goes in the global file Git reads last.
+  - If it's found in another global file, doppel moves it. For example, `~/.config/git/config` may hold the include from before `~/.gitconfig` existed.
+  - With `GIT_CONFIG_GLOBAL` set, that file is used exactly as Git uses it, without expanding `~`.
+- **R8.2** Every write is atomic (a temporary file in the same directory, then a rename), preserves the file's mode and symlinks (including a dangling symlink, whose target is created), and keeps a hidden backup of the previous version alongside it (`.gitconfig.doppel.bak`), like sshx.
+  - A command takes all its backups before replacing any file, and removes files only after every write has succeeded. A failure partway can leave an extra file behind, but never a folder rule pointing at a missing account file.
 - **R8.3** Key files are never overwritten or deleted. Generating a key at an existing path is refused.
 - **R8.4** `--dry-run` on any command that writes shows the file changes it would make, without writing.
-- **R8.5** `doppel uninstall` removes the include block and the `allowed_signers` block, leaving the account files and keys in place.
+- **R8.5** `doppel uninstall` removes the include block and the `allowed_signers` block from every global config file, leaving the account files and keys in place. If Git has since added other `include.path` lines to doppel's `[include]` section, only doppel's path is removed.
 
 ### R9. Interface
 
@@ -253,6 +260,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
 
 - This block is appended as text rather than with `git config --add`, which would put it inside an existing `[include]` section that may not be last.
 - Everything else is read and written with `git config --file <file>` (syntax that works on Git 2.34), never a hand-written parser. Git's quoting and escaping rules are subtle, and Git is the authority on its own format.
+- These single-file calls run with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. A broken or unusual user config can then neither stop doppel nor change what it writes, and doppel can always regenerate a damaged index.
 
 ### 6.5 External tools
 
