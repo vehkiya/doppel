@@ -19,7 +19,7 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys` and `github` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves, and `ui` only uses `plan.Change`. Nothing imports `cli`.
 * Export only what another package needs. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
@@ -48,6 +48,11 @@ Before committing, all of the following must pass cleanly:
 * `Apply` takes every backup first, writes next, and removes files last, so a failure partway never leaves a folder rule pointing at a missing file.
 * Because commands only stage changes, `--dry-run` shows exactly what a real run would write. Never write a file outside a plan.
 * doppel never overwrites or deletes key files.
+
+### 2.3b Self-update
+* Never install anything that hasn't passed both checks: a valid signature on `checksums.txt` from a key in `TrustedKeys`, and a matching SHA-256 for the archive. Don't add a way around them, not even a flag or an environment variable.
+* Rotate keys as `SECURITY.md` describes. The release workflow refuses keys that aren't in `TrustedKeys`.
+* Tests swap `releasesAPIURL` and `executablePath`, so they never contact GitHub or replace the real binary.
 
 ### 2.3a Interactive flows
 * A wizard is a list of `step`s run as **one** Huh form (`wizardForm`), so Shift+Tab goes back to any earlier page and Esc cancels from any page.

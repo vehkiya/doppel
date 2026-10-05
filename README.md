@@ -46,6 +46,7 @@ Login     ✓ github.com: logged in as jane-acme
   * `doppel test` logs in to each host and signs a test message.
   * `doppel doctor` finds anything that could make Git use the wrong account.
 * **Interactive or scripted:** an account browser and step-by-step wizards in a terminal; plain flags for scripts.
+* **Updates itself:** `doppel update` installs the latest release, but only one signed with doppel's release key. The browser says when a newer release is out.
 * **Careful with your files:**
   * `--dry-run` shows every change as a diff.
   * Every write is atomic and keeps a backup.
@@ -59,12 +60,9 @@ Login     ✓ github.com: logged in as jane-acme
 go install github.com/vehkiya/doppel@latest
 ```
 
-Or download a release binary for Linux or macOS from [Releases](https://github.com/vehkiya/doppel/releases), and verify it:
+Or download a release binary for Linux or macOS from [Releases](https://github.com/vehkiya/doppel/releases). Each release's checksums are signed; [SECURITY.md](SECURITY.md#verifying-a-release) shows how to verify a download.
 
-```bash
-sha256sum --check --ignore-missing checksums.txt
-gh attestation verify doppel_linux_amd64.tar.gz --repo vehkiya/doppel
-```
+Once installed, `doppel update` keeps it current.
 
 With [configsh](https://github.com/vehkiya/configsh), `./setup.sh` installs doppel and sets up the `dop` alias.
 
@@ -112,6 +110,7 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 | `doppel export <id> [--auth\|--signing]` | Prints and copies a public key, with where to add it on each host |
 | `doppel upload <id> [--auth\|--signing]` | Adds the keys to the account's GitHub user through `gh` |
 | `doppel doctor [--fix]` | Checks for anything that could make Git use the wrong account; `--fix` redoes doppel's own files |
+| `doppel update [--check] [--force]` | Installs the latest signed release over this binary (`--check` only looks) |
 | `doppel uninstall` | Removes doppel from your Git config and `allowed_signers`; accounts and keys are kept |
 
 **Key flags** for `add` and `edit`:
@@ -119,7 +118,7 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 - Signing key: `--signing-key <key>`, `--generate-signing-key`, `--sign-with-auth-key`, or `--no-signing`.
 - `--sign-commits=false` or `--sign-tags=false` sign only tags, or only commits.
 
-Commands that change files accept `--dry-run` and `--yes`. Set `ACCESSIBLE=1` for plain prompts instead of interactive forms, for screen readers.
+Commands that change files accept `--dry-run` and `--yes`. Set `ACCESSIBLE=1` for plain prompts instead of interactive forms, for screen readers. Set `DOPPEL_NO_UPDATE_CHECK=1` to stop the browser checking for new releases.
 
 ### Account browser keys
 
@@ -135,6 +134,7 @@ Commands that change files accept `--dry-run` and `--yes`. Set `ACCESSIBLE=1` fo
 | `d` | Delete (asks first) |
 | `/` | Filter |
 | `tab` | Details (on narrow terminals) |
+| `U` | Update doppel, when a newer release is out |
 | `q` / `esc` | Quit |
 
 In the wizards, **Shift+Tab** goes back to an earlier page and **Esc** cancels without saving.

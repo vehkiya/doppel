@@ -173,6 +173,8 @@ func (a *app) run(args []string) int {
 	case "-h", "--help", "help":
 		a.printUsage()
 		return 0
+	case "update", "upgrade": // doesn't need Git, so it can run even when Git is the problem
+		return a.cmdUpdate(args)
 	}
 
 	commands := map[string]func([]string) int{
@@ -227,6 +229,7 @@ func (a *app) printUsage() {
   doppel export <id> [--auth|--signing]  Print and copy a public key, with where to add it
   doppel upload <id> [--auth|--signing]  Add the account's keys to its GitHub user (with gh)
   doppel doctor [--fix]                  Check every account for problems
+  doppel update [--check]                Install the latest signed release (--check only looks)
   doppel uninstall                       Remove doppel's include from your Git config
   doppel version                         Show the version
 

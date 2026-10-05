@@ -27,7 +27,6 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - GitHub Enterprise Server, and automatic uploads to GitLab, Gitea, Forgejo and others. Those hosts are covered by `export`.
 - Windows.
 - Per-repo overrides. `git config --local` already handles those, and `whoami` shows them.
-- Self-update. Planned for later, following sshx.
 
 ## 3. Concepts
 
@@ -209,6 +208,13 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 - **R9.2** Every action is also a subcommand, with flags for non-interactive use, so configsh or scripts can set up accounts.
 - **R9.3** `dop` is an alias for `doppel` (a shell alias in configsh, like sshx's `fssh`), and doppel behaves identically under either name.
 
+### R10. Self-update
+
+- **R10.1** `doppel update` installs the latest release over the running binary. `--check` only says whether there's a newer one; `--force` reinstalls even when up to date. It doesn't need Git, so it works even when Git is the problem.
+- **R10.2** It only installs a release whose `checksums.txt` has a valid Ed25519 signature (`checksums.txt.sig`) from a key built into doppel (`TrustedKeys`), and whose archive matches its checksum. An unsigned release, an unknown key, or a mismatched archive is refused.
+- **R10.3** The new binary replaces the old one atomically (a temporary file in the same folder, then a rename). Without permission to write there, doppel says to update with the tool that installed it, or with `sudo`.
+- **R10.4** The browser checks for a newer release in the background when it opens, at most every 6 hours (cached in the user cache directory). It shows a notice and enables `U` to update. Development builds don't check, and neither does anything with `DOPPEL_NO_UPDATE_CHECK` set. After updating, the browser closes and asks you to run doppel again.
+
 ## 5. Command line
 
 ```
@@ -226,6 +232,7 @@ doppel test [<id>]                       Log in to each host and sign a test mes
 doppel doctor [--fix]                    Check every account for problems; --fix brings doppel's files up to date
 doppel export <id> [--auth|--signing]    Print and copy a public key, with host instructions
 doppel upload <id> [--auth|--signing]    Upload keys to GitHub with gh
+doppel update [--check] [--force]        Install the latest signed release (--check only looks)
 doppel uninstall                         Remove doppel's changes to your Git and SSH files
 doppel version
 
@@ -345,6 +352,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
     ui/        palette, styles and diff rendering
     version/   build version
     github/    adding keys to GitHub through gh
+    update/    self-update: checking for releases, verifying and installing them
     testenv/   a sandboxed home directory and Git environment for tests
   ```
 - The palette, badges and Huh theme are copied from sshx. The quality checks follow sshx's `AGENTS.md`: `gofmt -s`, `go test -race`, `golangci-lint`, a tidy `go.mod`. A doppel `AGENTS.md` adds the rules from §6.2 to §6.4.
@@ -367,7 +375,8 @@ Every account file sets every setting doppel manages, including a "reset" value 
 - `go install github.com/vehkiya/doppel@latest`, plus GitHub release binaries for Linux and macOS (amd64 and arm64), adapted from sshx's workflows.
   - **Validation:** every PR is linted and tested on Linux, and tested on macOS (for `gitdir/i:` and its case-insensitive filesystem).
   - **Releases:** every merge to `main` that changes the version gets a release. The version comes from Conventional Commits: `feat` bumps the minor version, anything else the patch, and `!` or `BREAKING CHANGE` the major.
-  - **Verification:** releases carry SHA-256 checksums and GitHub build provenance (`gh attestation verify`). Signed checksums, like sshx's, come with self-update, which is what needs them.
+  - **Verification:** releases carry SHA-256 checksums signed with the release key, and GitHub build provenance (`gh attestation verify`).
+  - **Signing:** the signing key exists only as the `DOPPEL_SIGNING_KEY` secret in the `release` environment, which only `main` can deploy to. The workflow refuses to publish unsigned, or to sign with a key that isn't in `TrustedKeys`.
 - configsh's `build-tools.sh` installs doppel, and `.zshrc` adds `alias dop="doppel"`.
 - Cheatsheet section 8 is rewritten around doppel.
 

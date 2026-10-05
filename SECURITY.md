@@ -24,18 +24,37 @@ I aim to acknowledge reports within 48 hours, and will keep you posted until a f
 - **Few changes outside its folder:** doppel changes only one block in your global Git config (its include) and one marked block in your `allowed_signers` file. Everything else lives in `~/.config/doppel`.
 - **Safe writes:** every write is atomic (a temporary file, then a rename), keeps symlinks and the file's mode, and keeps a hidden `.<name>.doppel.bak` backup of the previous version.
 - **Keys:** doppel never overwrites or deletes key files. When it generates a key, `ssh-keygen` asks for the passphrase; doppel never sees it.
+- **Updates:** `doppel update` only installs a release whose `checksums.txt` carries a valid Ed25519 signature (`checksums.txt.sig`) from a key built into doppel, and whose archive matches that file's SHA-256 checksum. Anything else is refused. The browser's update notice checks GitHub at most every 6 hours; set `DOPPEL_NO_UPDATE_CHECK=1` to turn it off.
 - **Uploads:** `doppel upload` only talks to GitHub through `gh`, using the token `gh` keeps for the account's own GitHub user. It ignores `GH_TOKEN`, `GITHUB_TOKEN` and `GH_HOST` from the environment, so they can't send keys to another account or host.
 
 ## Verifying a release
 
-Each release has SHA-256 checksums and GitHub build provenance:
+Each release's `checksums.txt` is signed with the doppel release key:
+
+```text
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAujWaKs2EU0xvq1tFtYyOmuVJxYJhYyc0/BxqGk+Yw5w=
+-----END PUBLIC KEY-----
+```
+
+To verify a download by hand, save the key above as `doppel-release.pub.pem`, then:
 
 ```bash
+base64 -d checksums.txt.sig > checksums.sig
+openssl pkeyutl -verify -pubin -inkey doppel-release.pub.pem -rawin -in checksums.txt -sigfile checksums.sig
 sha256sum --check --ignore-missing checksums.txt
 gh attestation verify doppel_linux_amd64.tar.gz --repo vehkiya/doppel
 ```
 
-doppel doesn't update itself yet. Signed checksums, like sshx's, will come with self-update, since that's what will need to verify them.
+The last command checks GitHub build provenance: that the archive was built by this repository's release workflow on `main`.
+
+Releases before v0.5.0 have no `checksums.txt.sig`.
+
+**Key rotation (maintainers):**
+1. Add the new public key to `TrustedKeys` (`internal/update/update.go`), and ship a release that's still signed with the old key. Installed binaries only trust the keys they were built with.
+2. Once users have that release, switch the `DOPPEL_SIGNING_KEY` secret in the `release` environment to the new key, and remove the old one from the list.
+
+The release workflow refuses to sign with a key that isn't listed. The private key exists only as that secret.
 
 ## Good practice
 
