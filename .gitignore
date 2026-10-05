@@ -1,0 +1,29 @@
+# Binaries
+/doppel
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+dist/
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+
+# Key material (e.g. the release signing key) must never be committed
+*.pem
+*.key
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+*~
