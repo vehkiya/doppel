@@ -63,8 +63,11 @@ Before committing, all of the following must pass cleanly:
 ### 2.3a Interactive flows
 * A wizard is a list of `step`s run as **one** Huh form (`wizardForm`), so Shift+Tab goes back to any earlier page and Esc cancels from any page.
   * **Hidden pages:** a page that only sometimes applies has a `hide` func.
-  * **Answers that change other pages:** choices and the review that depend on earlier answers use `liveSelect` / `liveNote`, which stay current as answers change.
-  * **Accessible mode:** Huh's accessible mode ignores hidden pages and doesn't load live choices, so there `runSteps` asks each visible page in turn. Pages are built by functions, so each one sees the answers before it.
+  * **Answers that change other pages:** descriptions and the review follow earlier answers (`liveDescription`, `liveNote`).
+  * **A select's choices never change** while the wizard runs. Huh v1 scrolls a select so its chosen option is at the top whenever its options change, hiding the ones above it, so don't use `OptionsFunc`. A choice that doesn't fit the other answers, such as signing with an auth key there isn't, is refused by the page's check.
+  * **Checks apply going forward** (`forward`): Huh checks a field again as it loses focus and won't leave a page with an error in either direction, so without it a half-typed answer would trap the user on its page. The Save button checks every shown page once more (`checkAnswers`), and a hidden page's answer doesn't count.
+  * **Note text is escaped** (`liveNote`, `escapeNote`): Huh reads `_`, `*` and `` ` `` in a note as formatting, which would swallow them from paths and names. Accessible mode prints notes as they are.
+  * **Accessible mode:** Huh's accessible mode ignores hidden pages and doesn't load live text, so there `runSteps` asks each visible page in turn. Pages are built by functions, so each one sees the answers before it.
 * Run every form through `app.runForm`. It applies the theme and `formKeyMap` (Esc and Ctrl+C cancel; select filtering is off so Esc means one thing), and switches to accessible mode for `$ACCESSIBLE` and for tests.
 * Validate a prefilled field with `keepIfEmpty`. In accessible mode an empty answer means "keep the value", and Huh validates the typed text before falling back to it.
 * Commands only ask when they have no flags and a terminal (`onlyWriteFlags`). Scripts must never get a question.

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/vehkiya/doppel/internal/accounts"
@@ -44,6 +45,32 @@ type answers struct {
 	Signing, SigningPath string
 	Sign                 []string // "commits", "tags"
 	Save                 bool
+
+	goingBack bool // the last key pressed moves back a page (trackDirection)
+}
+
+// trackDirection notes, for every message the form gets, whether the user
+// is moving back. It's the form's message filter.
+func (ans *answers) trackDirection(_ tea.Model, msg tea.Msg) tea.Msg {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		ans.goingBack = key.Matches(k, formKeyMap().Input.Prev)
+	}
+	return msg
+}
+
+// forward makes a page's check apply only when the user moves on. Huh
+// checks a field again as it loses focus, and won't leave a page holding an
+// error in either direction, so a half-typed answer would otherwise trap the
+// user on its page. Moving on still needs a valid answer, and the Save
+// button checks every page once more (checkAnswers), in case a page left
+// with a bad answer isn't passed again.
+func forward[T any](ans *answers, check func(T) error) func(T) error {
+	return func(v T) error {
+		if ans.goingBack {
+			return nil
+		}
+		return check(v)
+	}
 }
 
 // step is one page of the wizard. hide skips it, for example the GitHub
@@ -68,7 +95,7 @@ func formKeyMap() *huh.KeyMap {
 // any earlier page and Esc cancels from any of them. Accessible prompts
 // can't go back, and Huh's accessible mode ignores hidden pages, so there
 // each visible page is asked in turn instead.
-func (a *app) runSteps(steps []step) error {
+func (a *app) runSteps(ans *answers, steps []step) error {
 	if a.accessible {
 		for _, st := range steps {
 			if st.hide != nil && st.hide() {
@@ -80,11 +107,12 @@ func (a *app) runSteps(steps []step) error {
 		}
 		return nil
 	}
-	return a.runForm(wizardForm(steps))
+	return a.runForm(wizardForm(ans, steps))
 }
 
-// wizardForm puts the wizard's pages into one form.
-func wizardForm(steps []step) *huh.Form {
+// wizardForm puts the wizard's pages into one form, which tells the pages'
+// checks which way the user is moving.
+func wizardForm(ans *answers, steps []step) *huh.Form {
 	groups := make([]*huh.Group, len(steps))
 	for i, st := range steps {
 		groups[i] = st.group()
@@ -92,7 +120,7 @@ func wizardForm(steps []step) *huh.Form {
 			groups[i] = groups[i].WithHideFunc(st.hide)
 		}
 	}
-	return huh.NewForm(groups...).WithKeyMap(formKeyMap())
+	return huh.NewForm(groups...).WithKeyMap(formKeyMap()).WithProgramOptions(tea.WithFilter(ans.trackDirection))
 }
 
 // accountWizard walks through an account's settings, starting from acc: an
@@ -112,7 +140,7 @@ func (a *app) accountWizard(list []*accounts.Account, acc *accounts.Account, isN
 	a.printf("\n")
 
 	ans, steps := a.wizardSteps(list, acc, isNew)
-	if err := a.runSteps(steps); err != nil {
+	if err := a.runSteps(ans, steps); err != nil {
 		return wizardResult{}, err
 	}
 	if !ans.Save {
@@ -198,14 +226,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 		huh.NewInput().Key("folders").Title("Folders").
 			Description("Repos inside these folders use this account. Separate them with commas; leave empty for none").
 			Placeholder("~/projects/work").
-			Value(&ans.Folders).Validate(func(s string) error {
-			for _, f := range splitList(s) {
-				if _, _, err := a.env.NormalizeFolder(f, a.cwd); err != nil {
-					return err
-				}
-			}
-			return nil
-		}),
+			Value(&ans.Folders).Validate(forward(ans, a.checkFolders)),
 	}
 	if others > 0 {
 		where = append(where, huh.NewConfirm().Key("default").Title("Make it the default account?").
@@ -218,29 +239,26 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 		{group: func() *huh.Group {
 			return huh.NewGroup(
 				huh.NewInput().Key("hosts").Title("Git hosts").Description("Where this account pushes, separated by commas").
-					Value(&ans.Hosts).Validate(func(s string) error {
-					for _, h := range splitList(s) {
-						if err := accounts.ValidateHost(h); err != nil {
-							return err
-						}
-					}
-					return nil
-				}),
+					Value(&ans.Hosts).Validate(forward(ans, checkHosts)),
 			).Title("Hosts")
 		}},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
 				huh.NewInput().Key("github-user").Title("GitHub username").
 					Description("Optional. doppel checks the keys log in as this user, and uploads keys to it").
-					Value(&ans.GitHubUser).Validate(accounts.ValidateGitHubUser),
+					Value(&ans.GitHubUser).Validate(forward(ans, accounts.ValidateGitHubUser)),
 			).Title("Hosts")
 		}, hide: func() bool { return !anyGitHub() }},
 		{group: func() *huh.Group { return huh.NewGroup(where...).Title("Where it applies") }},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
-				a.liveSelect(huh.NewSelect[string]().Key("auth").Title("Auth key").
-					Description("The SSH key this account fetches and pushes with. A key of its own keeps hosts from mixing up your accounts").
-					Value(&ans.Auth), func() []huh.Option[string] { return a.authOptions(ans, acc, discovered, sshDir) }, ans),
+				a.liveDescription(huh.NewSelect[string]().Key("auth").Title("Auth key").
+					Options(a.authOptions(acc, discovered)...).
+					Value(&ans.Auth).Validate(forward(ans, func(string) error { return a.checkAuth(ans, acc) })),
+					func() string {
+						return "The SSH key this account fetches and pushes with. A key of its own keeps hosts from mixing up your accounts. " +
+							"Generate creates " + a.env.Shorten(keys.DefaultPath(sshDir, ans.accountID(acc), false))
+					}, &struct{ ID *string }{&ans.ID}),
 			).Title("Keys")
 		}},
 		{group: func() *huh.Group {
@@ -248,14 +266,18 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 				huh.NewInput().Key("auth-path").Title("Auth key file").
 					Description("A private key, or a .pub whose private key lives in an agent").
 					Placeholder("~/.ssh/id_ed25519").Value(&ans.AuthPath).
-					Validate(a.keyPathValidator(false)),
+					Validate(forward(ans, a.keyPathValidator(false))),
 			).Title("Keys")
 		}, hide: func() bool { return ans.Auth != keyPathEtc }},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
-				a.liveSelect(huh.NewSelect[string]().Key("signing").Title("Signing").
-					Description("Signed commits show as Verified on GitHub and GitLab").
-					Value(&ans.Signing), func() []huh.Option[string] { return a.signingOptions(ans, acc, discovered, sshDir) }, ans),
+				a.liveDescription(huh.NewSelect[string]().Key("signing").Title("Signing").
+					Options(a.signingOptions(acc, discovered)...).
+					Value(&ans.Signing).Validate(forward(ans, func(string) error { return a.checkSigning(ans, acc) })),
+					func() string {
+						return "Signed commits show as Verified on GitHub and GitLab. " +
+							"Generate creates " + a.env.Shorten(keys.DefaultPath(sshDir, ans.accountID(acc), true))
+					}, &struct{ ID *string }{&ans.ID}),
 			).Title("Keys")
 		}},
 		{group: func() *huh.Group {
@@ -263,7 +285,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 				huh.NewInput().Key("signing-path").Title("Signing key file").
 					Description("The key's .pub has to be next to it").
 					Placeholder("~/.ssh/id_ed25519").Value(&ans.SigningPath).
-					Validate(a.keyPathValidator(true)),
+					Validate(forward(ans, a.keyPathValidator(true))),
 			).Title("Keys")
 		}, hide: func() bool { return ans.Signing != keyPathEtc }},
 		{group: func() *huh.Group {
@@ -276,41 +298,63 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 		{group: func() *huh.Group {
 			return huh.NewGroup(
 				a.liveNote(huh.NewNote().Title("Review"), func() string { return a.review(ans, acc) }, ans),
-				huh.NewConfirm().Key("save").Title("Save this account?").Affirmative("Save").Negative("Cancel").Value(&ans.Save),
+				huh.NewConfirm().Key("save").Title("Save this account?").Affirmative("Save").Negative("Cancel").Value(&ans.Save).
+					Validate(forward(ans, func(save bool) error {
+						if !save {
+							return nil
+						}
+						return a.checkAnswers(ans, acc, anyGitHub)
+					})),
 			)
 		}},
 	}
 	return ans, steps
 }
 
-// liveSelect fills a select from options, keeping it current as earlier
-// answers change. Huh's accessible mode doesn't load live options, but asks
-// one page at a time, so there the options at that moment are enough.
-func (a *app) liveSelect(sel *huh.Select[string], options func() []huh.Option[string], binding any) *huh.Select[string] {
+// liveDescription gives a select a description that follows earlier
+// answers. Huh's accessible mode asks one page at a time, so there the
+// description at that moment is enough.
+func (a *app) liveDescription(sel *huh.Select[string], text func() string, binding any) *huh.Select[string] {
 	if a.accessible {
-		return sel.Options(options()...)
+		return sel.Description(text())
 	}
-	return sel.OptionsFunc(options, binding)
+	return sel.DescriptionFunc(text, binding)
 }
 
-// liveNote is liveSelect for a note's text.
+// liveNote gives a note text that follows earlier answers. Huh formats a
+// note's text in the full-screen form (_ for italics, * for bold), so it is
+// escaped there to show exactly as written; accessible prompts print it as
+// it is.
 func (a *app) liveNote(note *huh.Note, text func() string, binding any) *huh.Note {
 	if a.accessible {
 		return note.Description(text())
 	}
-	return note.DescriptionFunc(text, binding)
+	return note.DescriptionFunc(func() string { return escapeNote(text()) }, binding)
 }
+
+// escapeNote protects text from Huh's note formatting.
+func escapeNote(text string) string {
+	return strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`, "`", "\\`").Replace(text)
+}
+
+// accountID is the account's ID as answered so far, for naming its keys.
+func (ans *answers) accountID(acc *accounts.Account) string {
+	return cmpOr(strings.TrimSpace(ans.ID), acc.ID, "<id>")
+}
+
+// The key choices are the same whatever the earlier answers are, and a
+// choice that doesn't fit them is refused when the user moves on. Huh v1
+// scrolls a select so its chosen option is at the top whenever its options
+// change, hiding the ones above it, so they never change.
 
 // authOptions lists the auth key choices: keep the current key, generate
 // one, a key found in ~/.ssh, another file, or none.
-func (a *app) authOptions(ans *answers, acc *accounts.Account, discovered []string, sshDir string) []huh.Option[string] {
+func (a *app) authOptions(acc *accounts.Account, discovered []string) []huh.Option[string] {
 	var options []huh.Option[string]
 	if acc.AuthKey != "" {
 		options = append(options, huh.NewOption("Keep "+acc.AuthKey, keyKeep))
 	}
-	if generated := keys.DefaultPath(sshDir, cmpOr(strings.TrimSpace(ans.ID), acc.ID, "<id>"), false); !fileOrLinkExists(generated) {
-		options = append(options, huh.NewOption("Generate a new key: "+a.env.Shorten(generated), keyGenerate))
-	}
+	options = append(options, huh.NewOption("Generate a new key", keyGenerate))
 	for _, k := range discovered {
 		if a.env.Shorten(k) != acc.AuthKey {
 			options = append(options, huh.NewOption(keyLabel(a.env.Shorten(k)), k))
@@ -324,17 +368,14 @@ func (a *app) authOptions(ans *answers, acc *accounts.Account, discovered []stri
 // signingOptions lists the signing choices: keep the current key, sign with
 // the auth key, generate a separate key, a key found in ~/.ssh, another
 // file, or don't sign.
-func (a *app) signingOptions(ans *answers, acc *accounts.Account, discovered []string, sshDir string) []huh.Option[string] {
+func (a *app) signingOptions(acc *accounts.Account, discovered []string) []huh.Option[string] {
 	var options []huh.Option[string]
 	if acc.SigningKey != "" {
 		options = append(options, huh.NewOption("Keep "+acc.SigningKey, keyKeep))
 	}
-	if ans.Auth != keyNone {
-		options = append(options, huh.NewOption("Sign with the auth key", keyWithAuth))
-	}
-	if generated := keys.DefaultPath(sshDir, cmpOr(strings.TrimSpace(ans.ID), acc.ID, "<id>"), true); !fileOrLinkExists(generated) {
-		options = append(options, huh.NewOption("Generate a separate signing key: "+a.env.Shorten(generated), keyGenerate))
-	}
+	options = append(options,
+		huh.NewOption("Sign with the auth key", keyWithAuth),
+		huh.NewOption("Generate a separate signing key", keyGenerate))
 	for _, k := range discovered {
 		if a.env.Shorten(keys.PublicPath(k)) != acc.SigningKey {
 			options = append(options, huh.NewOption(keyLabel(a.env.Shorten(k)), k))
@@ -343,6 +384,81 @@ func (a *app) signingOptions(ans *answers, acc *accounts.Account, discovered []s
 	return append(options,
 		huh.NewOption("Another key file…", keyPathEtc),
 		huh.NewOption("Don't sign", keyNone))
+}
+
+// checkAuth refuses an auth choice that doesn't fit the other answers.
+func (a *app) checkAuth(ans *answers, acc *accounts.Account) error {
+	if ans.Auth == keyGenerate {
+		return a.checkGenerate(keys.DefaultPath(filepath.Join(a.env.Home, ".ssh"), ans.accountID(acc), false))
+	}
+	return nil
+}
+
+// checkSigning refuses a signing choice that doesn't fit the other answers.
+func (a *app) checkSigning(ans *answers, acc *accounts.Account) error {
+	switch ans.Signing {
+	case keyWithAuth:
+		if ans.Auth == keyNone {
+			return errors.New("there's no auth key to sign with: pick another key, or go back and choose one")
+		}
+	case keyGenerate:
+		return a.checkGenerate(keys.DefaultPath(filepath.Join(a.env.Home, ".ssh"), ans.accountID(acc), true))
+	}
+	return nil
+}
+
+// checkGenerate refuses to generate a key where one already exists.
+func (a *app) checkGenerate(path string) error {
+	if fileOrLinkExists(path) {
+		return fmt.Errorf("%s already exists, and doppel never overwrites keys: pick it from the list instead", a.env.Shorten(path))
+	}
+	return nil
+}
+
+func checkHosts(s string) error {
+	for _, h := range splitList(s) {
+		if err := accounts.ValidateHost(h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *app) checkFolders(s string) error {
+	for _, f := range splitList(s) {
+		if _, _, err := a.env.NormalizeFolder(f, a.cwd); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkAnswers checks every page that's showing once more before saving.
+// The pages check their answers only when the user moves on, so one left by
+// going back could still hold a bad answer.
+func (a *app) checkAnswers(ans *answers, acc *accounts.Account, anyGitHub func() bool) error {
+	checks := []struct {
+		page string
+		show bool
+		err  func() error
+	}{
+		{"Git hosts", true, func() error { return checkHosts(ans.Hosts) }},
+		{"GitHub username", anyGitHub(), func() error { return accounts.ValidateGitHubUser(ans.GitHubUser) }},
+		{"Folders", true, func() error { return a.checkFolders(ans.Folders) }},
+		{"Auth key", true, func() error { return a.checkAuth(ans, acc) }},
+		{"Auth key file", ans.Auth == keyPathEtc, func() error { return a.keyPathValidator(false)(ans.AuthPath) }},
+		{"Signing", true, func() error { return a.checkSigning(ans, acc) }},
+		{"Signing key file", ans.Signing == keyPathEtc, func() error { return a.keyPathValidator(true)(ans.SigningPath) }},
+	}
+	for _, c := range checks {
+		if !c.show {
+			continue
+		}
+		if err := c.err(); err != nil {
+			return fmt.Errorf("%s: %w. Go back with Shift+Tab to fix it", c.page, err)
+		}
+	}
+	return nil
 }
 
 // keyPathValidator checks a typed key file the way --auth-key and
@@ -366,7 +482,11 @@ func (a *app) applyAnswers(ans *answers, acc *accounts.Account) wizardResult {
 	if len(acc.Hosts) == 0 {
 		acc.Hosts = []string{accounts.DefaultHost}
 	}
-	acc.GitHubUser = strings.TrimSpace(ans.GitHubUser)
+	// The GitHub username page only shows for a GitHub host. When it's
+	// hidden, its answer (perhaps left half-typed by going back) doesn't count.
+	if slices.ContainsFunc(acc.Hosts, a.isGitHub) {
+		acc.GitHubUser = strings.TrimSpace(ans.GitHubUser)
+	}
 
 	res := wizardResult{folders: splitList(ans.Folders), makeDefault: ans.Default}
 	keyFile := func(choice, typed string) string {
