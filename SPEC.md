@@ -275,7 +275,21 @@ Every account file sets every setting doppel manages, including a "reset" value 
 ### 6.6 Code and conventions
 
 - Go (the same version as sshx). Charm stack: Bubble Tea, Bubbles, Huh, Lip Gloss. Static binary, no CGO, macOS and Linux.
-- A flat `package main`, organized by area like sshx: `account.go`, `gitconfig.go`, `keys.go`, `signers.go`, `github.go`, `doctor.go`, `wizard.go`, `tui.go`, `palette.go`.
+- Code is organized in packages under `internal/`. `main.go` stays at the repo root, so `go install github.com/vehkiya/doppel@latest` builds a `doppel` binary, as with sshx.
+  ```
+  main.go          calls cli.Run
+  internal/
+    cli/       commands, flags, prompts, whoami (later: the wizards and the TUI)
+    accounts/  the Account model, its managed settings, loading and validation
+    store/     writing accounts: account files, the generated index, the global include
+    plan/      staged writes with backups and atomic replacement (what --dry-run previews)
+    paths/     where files live; normalizing and matching folders
+    git/       running git; reading and writing Git config files through it
+    ui/        palette, styles and diff rendering
+    version/   build version
+    testenv/   a sandboxed home directory and Git environment for tests
+  ```
+  Later milestones add `keys/` (generation, fingerprints, `allowed_signers`) and `github/` (uploads through gh).
 - The palette, badges and Huh theme are copied from sshx. The quality checks follow sshx's `AGENTS.md`: `gofmt -s`, `go test -race`, `golangci-lint`, a tidy `go.mod`. A doppel `AGENTS.md` adds the rules from §6.2 to §6.4.
 
 ### 6.7 Testing

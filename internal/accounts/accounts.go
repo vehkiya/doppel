@@ -1,4 +1,6 @@
-package main
+// Package accounts defines doppel's accounts: the settings each account file
+// holds, and loading and validating them.
+package accounts
 
 import (
 	"errors"
@@ -11,6 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/paths"
 )
 
 // Account is one Git identity and the folders where it applies.
@@ -27,71 +32,72 @@ type Account struct {
 	SignCommits bool
 	SignTags    bool
 
-	// file is the account file this account was loaded from, "" for a new
+	// File is the account file this account was loaded from, "" for a new
 	// account. It differs from the account's path after a rename.
-	file string
+	File string
 }
 
 // Keys doppel manages in an account file. Everything else in the file is
 // left alone, so an account can carry extra settings of its own.
 const (
-	keyAccount    = "doppel.account"
-	keyDefault    = "doppel.default"
-	keyHost       = "doppel.host"
-	keyGitHubUser = "doppel.githubUser"
-	keyFolder     = "doppel.folder"
-	keyAuthKey    = "doppel.authKey"
-	keyName       = "user.name"
-	keyEmail      = "user.email"
-	keySigningKey = "user.signingkey"
-	keyGPGFormat  = "gpg.format"
-	keyCommitSign = "commit.gpgsign"
-	keyTagSign    = "tag.gpgsign"
-	keySSHCommand = "core.sshCommand"
+	KeyAccount    = "doppel.account"
+	KeyDefault    = "doppel.default"
+	KeyHost       = "doppel.host"
+	KeyGitHubUser = "doppel.githubUser"
+	KeyFolder     = "doppel.folder"
+	KeyAuthKey    = "doppel.authKey"
+	KeyName       = "user.name"
+	KeyEmail      = "user.email"
+	KeySigningKey = "user.signingkey"
+	KeyGPGFormat  = "gpg.format"
+	KeyCommitSign = "commit.gpgsign"
+	KeyTagSign    = "tag.gpgsign"
+	KeySSHCommand = "core.sshCommand"
 )
 
-const defaultHost = "github.com"
+// DefaultHost is an account's host unless it names others.
+const DefaultHost = "github.com"
 
-// setting is one managed key and the values an account file should hold
+// Setting is one managed key and the values an account file should hold
 // for it. No values means the key should be absent.
-type setting struct {
-	key    string
-	values []string
+type Setting struct {
+	Key    string
+	Values []string
 }
 
-// settings lists every key doppel manages in an account file, in file order.
+// Settings lists every key doppel manages in an account file, in file order.
 // The Git keys are always written, even when they only reset a value: Git
 // applies the default account first and the folder account on top, so a key
 // the folder account left out would leak in from the default account.
-func (a *Account) settings() []setting {
+func (a *Account) Settings() []Setting {
 	optional := func(v string) []string {
 		if v == "" {
 			return nil
 		}
 		return []string{v}
 	}
-	return []setting{
-		{keyAccount, []string{a.ID}},
-		{keyDefault, []string{strconv.FormatBool(a.Default)}},
-		{keyHost, a.Hosts},
-		{keyGitHubUser, optional(a.GitHubUser)},
-		{keyFolder, a.Folders},
-		{keyAuthKey, optional(a.AuthKey)},
-		{keyName, []string{a.Name}},
-		{keyEmail, []string{a.Email}},
-		{keySigningKey, []string{a.SigningKey}},
-		{keyGPGFormat, []string{"ssh"}},
-		{keyCommitSign, []string{strconv.FormatBool(a.SigningKey != "" && a.SignCommits)}},
-		{keyTagSign, []string{strconv.FormatBool(a.SigningKey != "" && a.SignTags)}},
-		{keySSHCommand, []string{sshCommand(a.AuthKey)}},
+	return []Setting{
+		{KeyAccount, []string{a.ID}},
+		{KeyDefault, []string{strconv.FormatBool(a.Default)}},
+		{KeyHost, a.Hosts},
+		{KeyGitHubUser, optional(a.GitHubUser)},
+		{KeyFolder, a.Folders},
+		{KeyAuthKey, optional(a.AuthKey)},
+		{KeyName, []string{a.Name}},
+		{KeyEmail, []string{a.Email}},
+		{KeySigningKey, []string{a.SigningKey}},
+		{KeyGPGFormat, []string{"ssh"}},
+		{KeyCommitSign, []string{strconv.FormatBool(a.SigningKey != "" && a.SignCommits)}},
+		{KeyTagSign, []string{strconv.FormatBool(a.SigningKey != "" && a.SignTags)}},
+		{KeySSHCommand, []string{SSHCommand(a.AuthKey)}},
 	}
 }
 
-// sshCommand is the core.sshCommand for an auth key. IdentitiesOnly stops
+// SSHCommand is the core.sshCommand for an auth key. IdentitiesOnly stops
 // ssh-agent from offering another account's key first, since GitHub logs in
 // as whichever account owns the first key that works. With no key it's plain
 // ssh, so the account never inherits another account's key.
-func sshCommand(key string) string {
+func SSHCommand(key string) string {
 	if key == "" {
 		return "ssh"
 	}
@@ -109,8 +115,8 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// parseBool reads a Git boolean.
-func parseBool(v string) bool {
+// ParseBool reads a Git boolean.
+func ParseBool(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "true", "yes", "on", "1":
 		return true
@@ -118,10 +124,10 @@ func parseBool(v string) bool {
 	return false
 }
 
-// accountFromConfig builds an account from the values in its file. Keys
+// fromConfig builds an account from the values in its file. Keys
 // with a one-to-one Git setting are read back, so hand edits to them stick;
 // core.sshCommand is always regenerated from doppel.authKey.
-func accountFromConfig(id, file string, values map[string][]string) *Account {
+func fromConfig(id, file string, values map[string][]string) *Account {
 	last := func(key string) string {
 		v := values[strings.ToLower(key)]
 		if len(v) == 0 {
@@ -131,18 +137,18 @@ func accountFromConfig(id, file string, values map[string][]string) *Account {
 	}
 	a := &Account{
 		ID:          id,
-		Name:        last(keyName),
-		Email:       last(keyEmail),
-		Hosts:       values[strings.ToLower(keyHost)],
-		GitHubUser:  last(keyGitHubUser),
-		Default:     parseBool(last(keyDefault)),
-		AuthKey:     last(keyAuthKey),
-		SigningKey:  last(keySigningKey),
-		SignCommits: parseBool(last(keyCommitSign)),
-		SignTags:    parseBool(last(keyTagSign)),
-		file:        file,
+		Name:        last(KeyName),
+		Email:       last(KeyEmail),
+		Hosts:       values[strings.ToLower(KeyHost)],
+		GitHubUser:  last(KeyGitHubUser),
+		Default:     ParseBool(last(KeyDefault)),
+		AuthKey:     last(KeyAuthKey),
+		SigningKey:  last(KeySigningKey),
+		SignCommits: ParseBool(last(KeyCommitSign)),
+		SignTags:    ParseBool(last(KeyTagSign)),
+		File:        file,
 	}
-	for _, f := range values[strings.ToLower(keyFolder)] {
+	for _, f := range values[strings.ToLower(KeyFolder)] {
 		if !strings.HasSuffix(f, "/") {
 			f += "/"
 		}
@@ -151,8 +157,8 @@ func accountFromConfig(id, file string, values map[string][]string) *Account {
 	return a
 }
 
-// loadAccounts reads every account file, sorted by ID.
-func loadAccounts(env *Env) ([]*Account, error) {
+// Load reads every account file, sorted by ID.
+func Load(env *paths.Env) ([]*Account, error) {
 	entries, err := os.ReadDir(env.AccountsDir())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -168,20 +174,21 @@ func loadAccounts(env *Env) ([]*Account, error) {
 		}
 		id := strings.TrimSuffix(name, ".gitconfig")
 		path := filepath.Join(env.AccountsDir(), name)
-		if err := validateID(id); err != nil {
+		if err := ValidateID(id); err != nil {
 			return nil, fmt.Errorf("%s: %w; rename the file", env.Shorten(path), err)
 		}
-		values, err := readConfigFile(path)
+		values, err := git.ReadConfigFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", env.Shorten(path), err)
 		}
-		accounts = append(accounts, accountFromConfig(id, path, values))
+		accounts = append(accounts, fromConfig(id, path, values))
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
 	return accounts, nil
 }
 
-func findAccount(accounts []*Account, id string) *Account {
+// Find returns the account named id, or nil.
+func Find(accounts []*Account, id string) *Account {
 	for _, a := range accounts {
 		if a.ID == id {
 			return a
@@ -190,7 +197,8 @@ func findAccount(accounts []*Account, id string) *Account {
 	return nil
 }
 
-func defaultAccount(accounts []*Account) *Account {
+// Default returns the default account, or nil.
+func Default(accounts []*Account) *Account {
 	for _, a := range accounts {
 		if a.Default {
 			return a
@@ -199,15 +207,15 @@ func defaultAccount(accounts []*Account) *Account {
 	return nil
 }
 
-// setDefault makes acc the only default account; nil leaves none.
-func setDefault(accounts []*Account, acc *Account) {
+// SetDefault makes acc the only default account; nil leaves none.
+func SetDefault(accounts []*Account, acc *Account) {
 	for _, a := range accounts {
 		a.Default = a == acc
 	}
 }
 
-// folderOwner returns the account a folder is bound to.
-func folderOwner(env *Env, accounts []*Account, folder string) *Account {
+// FolderOwner returns the account a folder is bound to.
+func FolderOwner(env *paths.Env, accounts []*Account, folder string) *Account {
 	for _, a := range accounts {
 		for _, f := range a.Folders {
 			if env.SamePath(f, folder) {
@@ -218,7 +226,8 @@ func folderOwner(env *Env, accounts []*Account, folder string) *Account {
 	return nil
 }
 
-func (a *Account) removeFolder(env *Env, folder string) {
+// RemoveFolder unbinds folder from the account.
+func (a *Account) RemoveFolder(env *paths.Env, folder string) {
 	a.Folders = slices.DeleteFunc(a.Folders, func(f string) bool { return env.SamePath(f, folder) })
 }
 
@@ -228,15 +237,17 @@ var (
 	githubUserPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,38})$`)
 )
 
-func validateID(id string) error {
+// ValidateID checks an account ID, which is also its file name.
+func ValidateID(id string) error {
 	if !idPattern.MatchString(id) {
 		return fmt.Errorf("account ID %q must be 1-32 lowercase letters, digits or dashes, not starting or ending with a dash", id)
 	}
 	return nil
 }
 
-func (a *Account) validate() error {
-	if err := validateID(a.ID); err != nil {
+// Validate checks one account's fields.
+func (a *Account) Validate() error {
+	if err := ValidateID(a.ID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(a.Name) == "" {
@@ -260,20 +271,20 @@ func (a *Account) validate() error {
 		return fmt.Errorf("account %s: %q isn't a valid GitHub username", a.ID, a.GitHubUser)
 	}
 	for _, f := range a.Folders {
-		if err := validateFolder(f); err != nil {
+		if err := paths.ValidateFolder(f); err != nil {
 			return fmt.Errorf("account %s: folder %q: %w (fix doppel.folder in the account file, or run `doppel unbind`)", a.ID, f, err)
 		}
 	}
 	return nil
 }
 
-// validateAccounts checks each account and the rules that span accounts:
+// ValidateAll checks each account and the rules that span accounts:
 // unique IDs, at most one default, and each folder bound to one account.
-func validateAccounts(env *Env, accounts []*Account) error {
+func ValidateAll(env *paths.Env, accounts []*Account) error {
 	ids := map[string]bool{}
 	var defaults []string
 	for _, a := range accounts {
-		if err := a.validate(); err != nil {
+		if err := a.Validate(); err != nil {
 			return err
 		}
 		if ids[a.ID] {

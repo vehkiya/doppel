@@ -1,4 +1,6 @@
-package main
+// Package ui holds doppel's terminal styling, shared with sshx, and the diff
+// renderer behind --dry-run.
+package ui
 
 import "github.com/charmbracelet/lipgloss"
 

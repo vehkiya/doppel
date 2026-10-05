@@ -1,4 +1,6 @@
-package main
+// Package plan stages file changes so doppel can preview them or write them
+// together, with backups and atomic replacement.
+package plan
 
 import (
 	"bytes"
@@ -29,15 +31,16 @@ type plannedFile struct {
 	remove  bool
 }
 
-// fileChange is one file a plan will create, modify or remove.
-type fileChange struct {
+// Change is one file a plan will create, modify or remove.
+type Change struct {
 	Path     string
 	Old, New []byte
 	Existed  bool // the file exists now
 	Exists   bool // the file will exist afterwards
 }
 
-func newPlan() (*Plan, error) {
+// New starts an empty plan. Close discards it.
+func New() (*Plan, error) {
 	dir, err := os.MkdirTemp("", "doppel-plan-")
 	if err != nil {
 		return nil, fmt.Errorf("creating staging directory: %w", err)
@@ -112,8 +115,8 @@ func (p *Plan) Content(path string) ([]byte, bool, error) {
 }
 
 // Changes lists the files whose content the plan changes, in staging order.
-func (p *Plan) Changes() ([]fileChange, error) {
-	var changes []fileChange
+func (p *Plan) Changes() ([]Change, error) {
+	var changes []Change
 	for _, path := range p.order {
 		f := p.files[path]
 		data, exists, err := p.Content(path)
@@ -123,7 +126,7 @@ func (p *Plan) Changes() ([]fileChange, error) {
 		if exists == f.existed && bytes.Equal(data, f.old) {
 			continue
 		}
-		changes = append(changes, fileChange{Path: path, Old: f.old, New: data, Existed: f.existed, Exists: exists})
+		changes = append(changes, Change{Path: path, Old: f.old, New: data, Existed: f.existed, Exists: exists})
 	}
 	return changes, nil
 }
@@ -132,14 +135,14 @@ func (p *Plan) Changes() ([]fileChange, error) {
 // remove before touching any of them, then writes files in staging order,
 // and removes files last. If something fails partway, what's left over is
 // at worst an extra file, never a rule pointing at a file that's gone.
-func (p *Plan) Apply() ([]fileChange, error) {
+func (p *Plan) Apply() ([]Change, error) {
 	changes, err := p.Changes()
 	if err != nil {
 		return nil, err
 	}
 	for _, c := range changes {
 		if c.Existed {
-			if err := AtomicWrite(BackupPath(c.Path), c.Old, 0600); err != nil {
+			if err := atomicWrite(BackupPath(c.Path), c.Old, 0600); err != nil {
 				return nil, fmt.Errorf("backing up %s: %w", c.Path, err)
 			}
 		}
@@ -152,7 +155,7 @@ func (p *Plan) Apply() ([]fileChange, error) {
 		if info, err := os.Stat(c.Path); err == nil {
 			mode = info.Mode().Perm()
 		}
-		if err := AtomicWrite(c.Path, c.New, mode); err != nil {
+		if err := atomicWrite(c.Path, c.New, mode); err != nil {
 			return nil, err
 		}
 	}
@@ -198,10 +201,10 @@ func symlinkTarget(path string) string {
 	return path
 }
 
-// AtomicWrite writes data to targetPath through a temporary file and a
+// atomicWrite writes data to targetPath through a temporary file and a
 // rename, so the file is never left half-written. When targetPath is a
 // symlink, the file it points to is replaced and the link is kept.
-func AtomicWrite(targetPath string, data []byte, perm os.FileMode) error {
+func atomicWrite(targetPath string, data []byte, perm os.FileMode) error {
 	targetPath = symlinkTarget(targetPath)
 
 	dir := filepath.Dir(targetPath)

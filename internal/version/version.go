@@ -1,8 +1,10 @@
-package main
+// Package version reports doppel's version and build details.
+package version
 
 import "runtime/debug"
 
-// Version information injected at build time via -ldflags.
+// Version information injected at build time, e.g.
+// -ldflags "-X github.com/vehkiya/doppel/internal/version.Version=v1.0.0".
 var (
 	Version   = "dev"
 	Commit    = "none"

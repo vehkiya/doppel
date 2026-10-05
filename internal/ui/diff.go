@@ -1,9 +1,11 @@
-package main
+package ui
 
 import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/vehkiya/doppel/internal/plan"
 )
 
 const diffContext = 2
@@ -63,8 +65,8 @@ func splitLines(data []byte) []string {
 	return strings.Split(s, "\n")
 }
 
-// writeDiff prints a unified diff of one planned change, labelled with name.
-func writeDiff(w io.Writer, name string, c fileChange) {
+// WriteDiff prints a unified diff of one planned change, labelled with name.
+func WriteDiff(w io.Writer, name string, c plan.Change) {
 	header := lineStyle('@')
 	switch {
 	case !c.Existed:

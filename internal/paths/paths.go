@@ -1,4 +1,6 @@
-package main
+// Package paths knows where doppel's and Git's files live, and how folders
+// are normalized and matched.
+package paths
 
 import (
 	"errors"
@@ -18,7 +20,8 @@ type Env struct {
 	GOOS      string
 }
 
-func loadEnv() (*Env, error) {
+// Load reads the environment: $HOME and $XDG_CONFIG_HOME.
+func Load() (*Env, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving home directory: %w", err)
@@ -56,11 +59,11 @@ func (e *Env) GlobalConfigPath() string {
 		return p // used exactly as Git uses it, without expanding "~"
 	}
 	home := filepath.Join(e.Home, ".gitconfig")
-	if fileExists(home) {
+	if FileExists(home) {
 		return home
 	}
 	xdg := filepath.Join(e.ConfigDir, "git", "config")
-	if fileExists(xdg) {
+	if FileExists(xdg) {
 		return xdg
 	}
 	return home
@@ -113,7 +116,7 @@ func (e *Env) Shorten(path string) string {
 // real expands "~/" and resolves symlinks in as much of path as exists, so
 // paths written through different symlinks compare equal.
 func (e *Env) real(path string) string {
-	resolved, _ := resolveExisting(filepath.Clean(e.Expand(path)))
+	resolved, _ := ResolveExisting(filepath.Clean(e.Expand(path)))
 	return resolved
 }
 
@@ -141,7 +144,7 @@ func (e *Env) NormalizeFolder(input, cwd string) (folder string, exists bool, er
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(cwd, p)
 	}
-	real, exists := resolveExisting(filepath.Clean(p))
+	real, exists := ResolveExisting(filepath.Clean(p))
 	if exists {
 		if info, err := os.Stat(real); err == nil && !info.IsDir() { //nolint:gosec // the user's own folder argument; only its type is read
 			return "", false, fmt.Errorf("%s is a file, not a folder", input)
@@ -151,17 +154,17 @@ func (e *Env) NormalizeFolder(input, cwd string) (folder string, exists bool, er
 	if !strings.HasSuffix(folder, "/") {
 		folder += "/"
 	}
-	if err := validateFolder(folder); err != nil {
+	if err := ValidateFolder(folder); err != nil {
 		return "", false, fmt.Errorf("%s: %w", input, err)
 	}
 	return folder, exists, nil
 }
 
-// validateFolder checks a folder in stored form before it's written into a
+// ValidateFolder checks a folder in stored form before it's written into a
 // folder rule. Hand-edited account files go through it too: a bad value
 // would make the generated index unreadable to Git, or match folders
 // anywhere on disk.
-func validateFolder(folder string) error {
+func ValidateFolder(folder string) error {
 	switch {
 	case !strings.HasPrefix(folder, "/") && !strings.HasPrefix(folder, "~/"):
 		return errors.New("folders must be absolute paths or start with ~/; Git would match a relative one anywhere on disk")
@@ -173,9 +176,9 @@ func validateFolder(folder string) error {
 	return nil
 }
 
-// resolveExisting resolves symlinks in p. When p doesn't exist, it resolves
+// ResolveExisting resolves symlinks in p. When p doesn't exist, it resolves
 // the nearest existing parent and appends the rest.
-func resolveExisting(p string) (string, bool) {
+func ResolveExisting(p string) (string, bool) {
 	if real, err := filepath.EvalSymlinks(p); err == nil {
 		return real, true
 	}
@@ -205,12 +208,13 @@ func (e *Env) FolderContains(folder, path string) bool {
 	return strings.HasPrefix(p, f)
 }
 
-// folderDepth orders folder rules from broad to specific.
-func (e *Env) folderDepth(folder string) int {
+// FolderDepth orders folder rules from broad to specific.
+func (e *Env) FolderDepth(folder string) int {
 	return strings.Count(strings.TrimSuffix(e.Expand(folder), "/"), "/")
 }
 
-func fileExists(path string) bool {
+// FileExists reports whether path exists, following symlinks.
+func FileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
