@@ -61,15 +61,28 @@ func TestAllowedSignersKeepsOtherEntries(t *testing.T) {
 		t.Fatalf("allowed_signers:\n%s", signers)
 	}
 
+	// An email change keeps the old one only for older signatures (DOP-6).
 	s.mustRun("edit", "work", "--email", "jane@acme.io")
 	signers = s.Read(".ssh/allowed_signers")
-	if strings.Contains(signers, "jane@acme.com") || !strings.Contains(signers, "jane@acme.io namespaces") {
+	if !strings.HasPrefix(signers, teammate) || strings.Contains(signers, `jane@acme.com namespaces="git" `) ||
+		!strings.Contains(signers, `jane@acme.com namespaces="git",valid-before=`) || !strings.Contains(signers, `jane@acme.io namespaces="git" `) {
 		t.Errorf("entry not updated after an email change:\n%s", signers)
 	}
 
 	s.mustRun("edit", "work", "--no-signing")
-	if got := s.Read(".ssh/allowed_signers"); got != teammate {
-		t.Errorf("allowed_signers after --no-signing:\n%q", got)
+	signers = s.Read(".ssh/allowed_signers")
+	trusted := 0 // jane's entries without a time limit
+	for _, line := range strings.Split(signers, "\n") {
+		if strings.HasPrefix(line, "jane@") && !strings.Contains(line, "valid-before") {
+			trusted++
+		}
+	}
+	if !strings.HasPrefix(signers, teammate) || strings.Count(signers, "valid-before") != 2 || trusted != 0 {
+		t.Errorf("allowed_signers after --no-signing:\n%s", signers)
+	}
+	// Git still reads the file, for the older commits.
+	if got := s.GitConfig(s.GitInit("repo"), "gpg.ssh.allowedSignersFile"); got != "~/.ssh/allowed_signers" {
+		t.Errorf("gpg.ssh.allowedSignersFile = %q after --no-signing", got)
 	}
 	if got := s.GitConfig(s.GitInit("repo"), accounts.KeyCommitSign); got != "false" {
 		t.Errorf("commit.gpgsign = %q after --no-signing", got)
@@ -183,6 +196,32 @@ func TestGenerateKeys(t *testing.T) {
 	// The keys exist now, so generating them again is refused.
 	if stderr := s.mustFail(1, "edit", "work", "--generate-auth-key"); !strings.Contains(stderr, "already exists; use it with --auth-key") {
 		t.Errorf("regenerating: %s", stderr)
+	}
+}
+
+// A save that can't be staged fails before any key is generated, so the
+// same command works once the cause is fixed.
+func TestKeysAreGeneratedOnlyOnceTheSaveCanStage(t *testing.T) {
+	s := newSandbox(t)
+	s.Key("id_personal", "jane@personal.dev", "")
+	s.addAccount("personal", "jane@personal.dev", "--auth-key", "~/.ssh/id_personal", "--sign-with-auth-key")
+	if err := os.Remove(s.Path(".ssh/id_personal.pub")); err != nil { // R4.4a: its signing key can't be read now
+		t.Fatal(err)
+	}
+
+	s.tty = true
+	args := []string{"add", "work", "--name", "Jane Doe", "--email", "jane@acme.com", "--generate-auth-key"}
+	if stderr := s.mustFail(1, args...); !strings.Contains(stderr, "account personal: signing key ~/.ssh/id_personal.pub") {
+		t.Errorf("add with an unreadable signing key: %s", stderr)
+	}
+	if s.Exists(".ssh/id_ed25519_work") || s.Exists(".ssh/id_ed25519_work.pub") {
+		t.Fatal("a save that couldn't stage still generated the key")
+	}
+
+	s.mustRun("edit", "personal", "--no-signing")
+	s.mustRun(args...)
+	if !s.Exists(".ssh/id_ed25519_work") {
+		t.Error("the retry didn't generate the key")
 	}
 }
 

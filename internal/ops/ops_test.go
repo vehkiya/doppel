@@ -215,3 +215,24 @@ func TestWhoamiOutsideARepo(t *testing.T) {
 		t.Errorf("Whoami = %+v, %v", id, err)
 	}
 }
+
+// A save that fails after generating keys says they were kept, and how to
+// use them, since doppel never deletes keys.
+func TestSaveKeepsGeneratedKeysOnFailure(t *testing.T) {
+	s, ctx, _ := newContext(t, nil)
+	ch, err := ops.Add(ctx, nil, ops.AddRequest{
+		Account: &accounts.Account{ID: "work", Name: "Jane", Email: "jane@acme.com"},
+		Keys:    ops.KeyChanges{GenerateAuth: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := errors.New("another doppel holds the lock")
+	_, err = ops.Save(ctx, ch, ops.SaveOptions{
+		Generate: func(k ops.NewKey) error { s.Key("id_ed25519_work", k.Comment, ""); return nil },
+		Lock:     func() error { return locked },
+	})
+	if !errors.Is(err, locked) || !strings.Contains(err.Error(), "The new auth key ~/.ssh/id_ed25519_work was kept: use it with --auth-key ~/.ssh/id_ed25519_work") {
+		t.Errorf("Save = %v", err)
+	}
+}

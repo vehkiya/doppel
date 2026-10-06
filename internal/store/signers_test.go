@@ -45,3 +45,14 @@ func TestRenderIndexPointsGitAtTheSignersFile(t *testing.T) {
 		t.Errorf("index sets allowedSignersFile when it shouldn't:\n%s", got)
 	}
 }
+
+func TestTrustedSigners(t *testing.T) {
+	text := "bob@acme.com namespaces=\"git\" ssh-ed25519 BOB\n\n" + signersBegin + "\n" +
+		"jane@acme.com namespaces=\"git\" ssh-ed25519 NEW\n" +
+		"jane@old.dev namespaces=\"git\",valid-before=\"20260101120000\" ssh-ed25519 OLD\n" +
+		signersEnd + "\n"
+	got := trustedSigners(text)
+	if len(got) != 1 || got[0] != (signer{"jane@acme.com", "ssh-ed25519 NEW"}) {
+		t.Errorf("trustedSigners = %+v; want only doppel's entry without a time limit", got)
+	}
+}
