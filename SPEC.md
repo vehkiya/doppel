@@ -381,22 +381,26 @@ Every account file sets every setting doppel manages, including a "reset" value 
   ```
   main.go          calls cli.Run
   internal/
-    cli/        commands, flags, prompts, whoami, the wizards, and the loop around the browser
+    cli/        flags, prompts, the wizards and the loop around the browser: it turns them into ops requests and prints the results
+    ops/        what the commands do: account changes (typed requests in, a Change and a Result out), whoami, test, export, upload
+    doctor/     doctor's checks, returned as findings
     tui/        the account browser (picks an action; cli carries it out)
-    accounts/   the Account model, its managed settings, loading and validation; the folder rules and which one applies
+    accounts/   the Account model, its managed settings (one registry), loading and validation; the folder rules and which one applies
     store/      writing accounts: validation, account files, the generated index, the global include, the write lock
     plan/       staged writes with backups and rollback (what --dry-run previews)
     atomicfile/ replacing a file atomically (plan and update)
     paths/      where files live; normalizing folders and comparing paths
     proc/       running external tools with a time limit
     git/        running git; reading and writing Git config files through it
-    keys/       reading, generating and checking SSH keys; the login and signing checks
+    keys/       key references (keys.Ref); reading, generating and checking SSH keys; the login and signing checks
+    hosts/      which hosts are GitHub (asked once per command), each host's steps for adding a key, remote URLs
     ui/         palette, styles and diff rendering
     version/    build version
     github/     adding keys to GitHub through gh
     update/     self-update: checking for releases, verifying and installing them
     testenv/    a sandboxed home directory and Git environment for tests
   ```
+- Dependencies point one way, from `cli` down to the leaves; a test (`architecture_test.go`) checks every import against the allowed layers, so CI catches a shortcut.
 - The palette, badges and Huh theme are copied from sshx. The quality checks follow sshx's `AGENTS.md`: `gofmt -s`, `go test -race`, `golangci-lint`, a tidy `go.mod`. A doppel `AGENTS.md` adds the rules from §6.2 to §6.4.
 
 ### 6.7 Testing
