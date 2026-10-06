@@ -416,3 +416,46 @@ func ValidateAll(env *paths.Env, accounts []*Account) error {
 	}
 	return nil
 }
+
+// SharedHost returns a host both accounts use, or "".
+func SharedHost(x, y *Account) string {
+	for _, h := range x.Hosts {
+		for _, g := range y.Hosts {
+			if strings.EqualFold(h, g) {
+				return h
+			}
+		}
+	}
+	return ""
+}
+
+// SharedAuthKey returns a host on which x and y log in with the same auth
+// key, or "". A host like GitHub lets a key belong to one account only, so
+// one of them would log in as the other.
+func SharedAuthKey(env *paths.Env, x, y *Account) string {
+	if x.AuthKey == "" || y.AuthKey == "" {
+		return ""
+	}
+	host := SharedHost(x, y)
+	if host == "" {
+		return ""
+	}
+	fx, errX := keys.Fingerprint(x.AuthKey.Map(env.Expand))
+	fy, errY := keys.Fingerprint(y.AuthKey.Map(env.Expand))
+	if errX != nil || errY != nil || fx != fy {
+		return ""
+	}
+	return host
+}
+
+// SigningScope says what an account signs: "commits and tags", "commits"
+// or "tags".
+func SigningScope(commits, tags bool) string {
+	switch {
+	case commits && tags:
+		return "commits and tags"
+	case commits:
+		return "commits"
+	}
+	return "tags"
+}

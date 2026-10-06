@@ -227,31 +227,11 @@ func (a *app) dryRunKeys(pending []pendingKey) func(keys.Ref) (string, error) {
 func (a *app) warnSharedKeys(list []*accounts.Account) {
 	for i, x := range list {
 		for _, y := range list[i+1:] {
-			if x.AuthKey == "" || y.AuthKey == "" {
-				continue
-			}
-			host := sharedHost(x, y)
-			if host == "" {
-				continue
-			}
-			fx, errX := keys.Fingerprint(x.AuthKey.Map(a.env.Expand))
-			fy, errY := keys.Fingerprint(y.AuthKey.Map(a.env.Expand))
-			if errX == nil && errY == nil && fx == fy {
+			if host := accounts.SharedAuthKey(a.env, x, y); host != "" {
 				a.warnf("%s and %s use the same auth key on %s. A host like GitHub lets a key belong to one account only, so one of them will log in as the other.", x.ID, y.ID, host)
 			}
 		}
 	}
-}
-
-func sharedHost(x, y *accounts.Account) string {
-	for _, h := range x.Hosts {
-		for _, g := range y.Hosts {
-			if strings.EqualFold(h, g) {
-				return h
-			}
-		}
-	}
-	return ""
 }
 
 // keySummary describes an account's keys in a few words, for ls.

@@ -25,10 +25,7 @@ func (a *app) macKeychain() bool {
 // for its passphrase. On a Mac it also keeps the passphrase in the Keychain,
 // so the key comes back after logging in again.
 func (a *app) loadCommand(key keys.Ref) string {
-	if a.macKeychain() {
-		return "ssh-add --apple-use-keychain " + key.PrivatePath()
-	}
-	return "ssh-add " + key.PrivatePath()
+	return keys.LoadCommand(key, a.macKeychain())
 }
 
 // rememberPassphrases helps Git use newly generated keys without asking for

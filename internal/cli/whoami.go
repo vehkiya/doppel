@@ -101,7 +101,7 @@ func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offlin
 		a.row("SSH", ssh)
 	}
 	if accounts.ParseBool(value(accounts.KeyCommitSign)) || accounts.ParseBool(value(accounts.KeyTagSign)) {
-		a.row("Signing", fmt.Sprintf("%s · %s", signingScope(value(accounts.KeyCommitSign), value(accounts.KeyTagSign)), value(accounts.KeySigningKey)))
+		a.row("Signing", fmt.Sprintf("%s · %s", accounts.SigningScope(accounts.ParseBool(value(accounts.KeyCommitSign)), accounts.ParseBool(value(accounts.KeyTagSign))), value(accounts.KeySigningKey)))
 	} else {
 		a.row("Signing", "off")
 	}
@@ -212,16 +212,6 @@ func (a *app) folderRule(list []*accounts.Account, path string) (id, rule string
 
 func (a *app) row(label, value string) {
 	a.printf("%s %s\n", ui.Label.Render(fmt.Sprintf("%-9s", label)), value)
-}
-
-func signingScope(commits, tags string) string {
-	switch {
-	case accounts.ParseBool(commits) && accounts.ParseBool(tags):
-		return "commits and tags"
-	case accounts.ParseBool(commits):
-		return "commits"
-	}
-	return "tags"
 }
 
 // loginRow tries the account's key on the repo's remote host, without
