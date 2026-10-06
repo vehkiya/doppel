@@ -6,7 +6,6 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/vehkiya/doppel/internal/accounts"
-	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/tui"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -148,26 +147,17 @@ func (a *app) pause() {
 
 // keyInfo works out how each account's keys are kept, for the browser.
 func (a *app) keyInfo(list []*accounts.Account) map[string]tui.KeyInfo {
+	ctx := a.opsContext(writeFlags{})
 	info := map[string]tui.KeyInfo{}
 	for _, acc := range list {
 		var ki tui.KeyInfo
 		if acc.AuthKey != "" {
-			ki.Auth = a.keyWords(acc.AuthKey)
+			ki.Auth = ops.KeyStatus(ctx, acc.AuthKey)
 		}
 		if acc.SigningKey != "" && !acc.SigningKey.SameKey(acc.AuthKey) {
-			ki.Signing = a.keyWords(acc.SigningKey)
+			ki.Signing = ops.KeyStatus(ctx, acc.SigningKey)
 		}
 		info[acc.ID] = ki
 	}
 	return info
-}
-
-// keyWords describes how a key is kept, such as ["passphrase", "in agent"].
-func (a *app) keyWords(key keys.Ref) []string {
-	path := key.Map(a.env.Expand)
-	words := []string{keys.CheckProtection(path).String()}
-	if loaded, running := keys.InAgent(path); running && loaded {
-		words = append(words, "in agent")
-	}
-	return words
 }

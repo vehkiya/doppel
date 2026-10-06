@@ -2,14 +2,11 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/accounts"
-	"github.com/vehkiya/doppel/internal/git"
-	"github.com/vehkiya/doppel/internal/hosts"
-	"github.com/vehkiya/doppel/internal/paths"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
@@ -37,198 +34,83 @@ func (a *app) cmdWhoami(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-
-	// A path that doesn't exist yet, such as a clone target, is answered by
-	// the folder rules: asking Git from an existing parent would describe
-	// whatever repo encloses it, not the new repo.
-	dir := filepath.Clean(path)
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() { //nolint:gosec // the user's own path argument; only its type is read
-		if err == nil {
-			dir = filepath.Dir(dir) // a file: describe the repo it's in
-		} else {
-			return a.whoamiOutsideRepo(list, path)
-		}
-	}
-	gitDir, err := git.Run(dir, "rev-parse", "--absolute-git-dir")
-	if err != nil {
-		return a.whoamiOutsideRepo(list, path)
-	}
-	return a.whoamiInRepo(list, dir, strings.TrimSpace(gitDir), offline)
-}
-
-// whoamiInRepo asks Git which account applies, so the answer always matches
-// what Git does, then explains it.
-func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offline bool) int {
-	out, err := git.Run(path, "config", "--show-scope", "--show-origin", "--list", "--null")
+	ctx := a.opsContext(writeFlags{})
+	id, err := ops.Whoami(ctx, list, path)
 	if err != nil {
 		return a.fail(err)
 	}
-	effective := map[string]git.ConfigEntry{}
-	for _, e := range git.ParseConfigList(out, true) {
-		effective[e.Key] = e // the last value wins, as in Git
-	}
-	value := func(key string) string { return effective[strings.ToLower(key)].Value }
-
-	top, err := git.Run(path, "rev-parse", "--show-toplevel")
-	repo := strings.TrimSpace(top)
-	if err != nil || repo == "" {
-		repo = filepath.Dir(gitDir) // a bare repo has no working tree
-	}
-	a.row("Repo", a.env.Shorten(repo))
-
-	id := value(accounts.KeyAccount)
-	acc := accounts.Find(list, id)
-	switch {
-	case id == "":
-		a.row("Account", ui.Warn.Render("none"))
-	case acc == nil:
-		a.row("Account", ui.Warn.Render(id+" (no such account file)"))
-	default:
-		real := gitDir
-		if resolved, err := filepath.EvalSymlinks(gitDir); err == nil {
-			real = resolved
+	if !id.InRepo {
+		note := " (not a Git repository)"
+		if !id.Exists {
+			note = " (doesn't exist yet)"
 		}
-		a.row("Account", ui.Accent.Render(acc.ID)+ui.Dim.Render(" ("+a.ruleFor(list, acc, real)+")"))
+		a.row("Path", a.env.Shorten(id.Path)+ui.Dim.Render(note))
+		if id.NewRepoID != "" {
+			a.row("New repos", ui.Accent.Render(id.NewRepoID)+ui.Dim.Render(" ("+id.NewRepoRule+")"))
+		} else {
+			a.row("New repos", ui.Warn.Render("no doppel account")+ui.Dim.Render(" (your global Git config applies)"))
+		}
+		return 0
 	}
-	a.row("Name", value(accounts.KeyName))
-	a.row("Email", value(accounts.KeyEmail))
-	switch ssh := value(accounts.KeySSHCommand); {
-	case acc != nil && acc.AuthKey != "" && ssh == accounts.SSHCommand(acc.AuthKey):
-		a.row("Auth key", acc.AuthKey.Display()+ui.Dim.Render(" ("+strings.Join(a.keyWords(acc.AuthKey), ", ")+")"))
-	case ssh == "ssh" || ssh == "":
+
+	a.row("Repo", a.env.Shorten(id.Repo))
+	switch {
+	case id.AccountID == "":
+		a.row("Account", ui.Warn.Render("none"))
+	case id.Account == nil:
+		a.row("Account", ui.Warn.Render(id.AccountID+" (no such account file)"))
+	default:
+		a.row("Account", ui.Accent.Render(id.Account.ID)+ui.Dim.Render(" ("+id.Rule+")"))
+	}
+	a.row("Name", id.Name)
+	a.row("Email", id.Email)
+	switch {
+	case id.UsesAccountKey:
+		key := id.Account.AuthKey
+		a.row("Auth key", key.Display()+ui.Dim.Render(" ("+strings.Join(ops.KeyStatus(ctx, key), ", ")+")"))
+	case id.SSHCommand == "ssh" || id.SSHCommand == "":
 		a.row("Auth key", "your default SSH keys")
 	default:
-		a.row("SSH", ssh)
+		a.row("SSH", id.SSHCommand)
 	}
-	if accounts.ParseBool(value(accounts.KeyCommitSign)) || accounts.ParseBool(value(accounts.KeyTagSign)) {
-		a.row("Signing", fmt.Sprintf("%s · %s", accounts.SigningScope(accounts.ParseBool(value(accounts.KeyCommitSign)), accounts.ParseBool(value(accounts.KeyTagSign))), value(accounts.KeySigningKey)))
+	if id.SignCommits || id.SignTags {
+		a.row("Signing", fmt.Sprintf("%s · %s", accounts.SigningScope(id.SignCommits, id.SignTags), id.SigningKey))
 	} else {
 		a.row("Signing", "off")
 	}
 
-	if acc != nil && !offline {
-		a.loginRow(acc, path)
-	}
-
-	// path may be a plain folder inside an enclosing repo, such as a home
-	// directory managed with yadm. A repo created there gets its own
-	// account, so say so when that differs from the enclosing repo's.
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		if top, err := filepath.EvalSymlinks(repo); err == nil && real != top {
-			if newID, rule := a.folderRule(list, real); newID != id && newID != "" {
-				a.row("New repos", ui.Accent.Render(newID)+ui.Dim.Render(" ("+rule+")"))
+	if id.Account != nil && !offline {
+		if login, ok := ops.RemoteLogin(ctx, id.Account, path); ok {
+			switch {
+			case login.Skipped:
+				a.row("Login", ui.Dim.Render(login.Detail))
+			case login.OK:
+				a.row("Login", ui.OK.Render("✓")+" "+login.Label+": "+login.Detail)
+			default:
+				a.row("Login", ui.Error.Render("✗")+" "+login.Label+": "+login.Detail+ui.Dim.Render(" (try `doppel test "+id.Account.ID+"`)"))
 			}
 		}
 	}
+	if id.NewRepoID != "" {
+		a.row("New repos", ui.Accent.Render(id.NewRepoID)+ui.Dim.Render(" ("+id.NewRepoRule+")"))
+	}
 
-	if id == "" {
+	if id.AccountID == "" {
 		a.printf("\n")
 		if accounts.Default(list) == nil {
 			a.notef("No doppel account applies here. Bind this repo's folder with `doppel bind <id> <folder>`, or set a default with `doppel default <id>`.")
 		}
 		return 0
 	}
-	a.warnOverrides(effective)
-	return 0
-}
-
-// ruleFor explains why Git applied acc to a repo: the folder rule that
-// picks it, or being the default account. "matched by Git" covers anything
-// else, such as an index that doesn't match the account files yet.
-func (a *app) ruleFor(list []*accounts.Account, acc *accounts.Account, gitDir string) string {
-	if r, ok := accounts.MatchFolder(a.env, list, gitDir); ok && r.ID == acc.ID {
-		return "folder " + r.Folder
-	}
-	if acc.Default {
-		return "default account"
-	}
-	return "matched by Git"
-}
-
-// warnOverrides points out identity settings that don't come from a doppel
-// account file, such as a repo's own `git config --local` values or a global
-// setting placed after doppel's include.
-func (a *app) warnOverrides(effective map[string]git.ConfigEntry) {
-	var lines []string
-	for _, key := range accounts.IdentityKeys() {
-		e, ok := effective[strings.ToLower(key)]
-		if !ok || a.isAccountFile(e.Origin) {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("%s = %s comes from %s (%s config)", key, e.Value, strings.TrimPrefix(e.Origin, "file:"), e.Scope))
-	}
-	for _, name := range []string{"GIT_SSH_COMMAND", "GIT_SSH"} {
-		if v := os.Getenv(name); v != "" {
-			lines = append(lines, fmt.Sprintf("%s=%s is set in your environment and overrides the account's SSH command", name, v))
+	if len(id.Overrides) > 0 {
+		a.printf("\n")
+		for _, line := range id.Overrides {
+			a.warnf("%s", line)
 		}
 	}
-	if len(lines) == 0 {
-		return
-	}
-	a.printf("\n")
-	for _, line := range lines {
-		a.warnf("%s", line)
-	}
-}
-
-// isAccountFile reports whether a --show-origin value names a doppel account file.
-func (a *app) isAccountFile(origin string) bool {
-	path, ok := strings.CutPrefix(origin, "file:")
-	if !ok {
-		return false
-	}
-	return a.env.SamePath(filepath.Dir(path), a.env.AccountsDir())
-}
-
-// whoamiOutsideRepo applies the folder rules itself: Git can only answer for
-// an existing repo.
-func (a *app) whoamiOutsideRepo(list []*accounts.Account, path string) int {
-	real, _ := paths.ResolveExisting(filepath.Clean(path))
-	note := " (not a Git repository)"
-	if _, err := os.Stat(path); err != nil { //nolint:gosec // the user's own path argument; only its existence is read
-		note = " (doesn't exist yet)"
-	}
-	a.row("Path", a.env.Shorten(real)+ui.Dim.Render(note))
-	if id, rule := a.folderRule(list, real); id != "" {
-		a.row("New repos", ui.Accent.Render(id)+ui.Dim.Render(" ("+rule+")"))
-	} else {
-		a.row("New repos", ui.Warn.Render("no doppel account")+ui.Dim.Render(" (your global Git config applies)"))
-	}
 	return 0
-}
-
-// folderRule returns the account a new repo at path (a real path) would get,
-// and the rule that picks it: the folder rule Git would apply, or else the
-// default account. It returns "" when no account applies.
-func (a *app) folderRule(list []*accounts.Account, path string) (id, rule string) {
-	if r, ok := accounts.MatchFolder(a.env, list, path); ok {
-		return r.ID, "folder " + r.Folder
-	}
-	if def := accounts.Default(list); def != nil {
-		return def.ID, "default account"
-	}
-	return "", ""
 }
 
 func (a *app) row(label, value string) {
 	a.printf("%s %s\n", ui.Label.Render(fmt.Sprintf("%-9s", label)), value)
-}
-
-// loginRow tries the account's key on the repo's remote host, without
-// asking for anything: a passphrase prompt in whoami would get in the way.
-func (a *app) loginRow(acc *accounts.Account, repo string) {
-	url := hosts.RemoteURL(repo)
-	if url == "" {
-		return
-	}
-	host := hosts.SSHHost(url)
-	if host == "" {
-		a.row("Login", ui.Dim.Render("the remote uses "+hosts.Scheme(url)+", which doppel's SSH keys don't cover"))
-		return
-	}
-	if ok, detail := a.checkLogin(acc, host, true); ok {
-		a.row("Login", ui.OK.Render("✓")+" "+host+": "+detail)
-	} else {
-		a.row("Login", ui.Error.Render("✗")+" "+host+": "+detail+ui.Dim.Render(" (try `doppel test "+acc.ID+"`)"))
-	}
 }

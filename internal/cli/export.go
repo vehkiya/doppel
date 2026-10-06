@@ -10,29 +10,12 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/accounts"
-	"github.com/vehkiya/doppel/internal/hosts"
-	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/proc"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
 const exportUsage = "doppel export <id> [--auth | --signing] [--no-copy]"
-
-// exportedKey is one public key export shows, and what it's for.
-type exportedKey struct {
-	key           keys.Ref // expanded
-	auth, signing bool
-}
-
-func (k exportedKey) purpose() string {
-	switch {
-	case k.auth && k.signing:
-		return "Auth and signing key"
-	case k.auth:
-		return "Auth key"
-	}
-	return "Signing key"
-}
 
 func (a *app) cmdExport(args []string) int {
 	fs := newFlagSet("export")
@@ -51,28 +34,30 @@ func (a *app) cmdExport(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	acc := accounts.Find(list, positional[0])
-	if acc == nil {
-		return a.fail(fmt.Errorf("no account named %s", positional[0]))
-	}
-
-	exported, err := a.keysToExport(acc, onlyAuth, onlySigning)
+	acc, err := ops.Find(list, positional[0])
 	if err != nil {
 		return a.fail(err)
 	}
-	var lines []string
+
+	exported, err := ops.ExportKeys(a.opsContext(writeFlags{}), acc, onlyAuth, onlySigning)
+	if err != nil {
+		return a.fail(err)
+	}
+	a.showExport(acc, exported, !noCopy)
+	return 0
+}
+
+// showExport prints the public keys and how to add them on each of acc's
+// hosts. With toClipboard, a single key also goes on the clipboard.
+func (a *app) showExport(acc *accounts.Account, exported []ops.ExportKey, toClipboard bool) {
+	ctx := a.opsContext(writeFlags{})
 	for _, k := range exported {
-		line, err := keys.ReadPublicLine(k.key)
-		if err != nil {
-			return a.fail(fmt.Errorf("%s: %w", a.publicName(k.key), err))
-		}
-		lines = append(lines, line)
-		a.printf("%s %s\n%s\n\n", ui.Label.Render(k.purpose()+" for "+acc.ID), ui.Dim.Render("("+a.publicName(k.key)+")"), line)
+		a.printf("%s %s\n%s\n\n", ui.Label.Render(k.Purpose()+" for "+acc.ID), ui.Dim.Render("("+ops.PublicName(ctx, k.Key)+")"), k.Line)
 	}
 	switch {
-	case noCopy:
-	case len(lines) == 1:
-		if err := a.copy(lines[0]); err != nil {
+	case !toClipboard:
+	case len(exported) == 1:
+		if err := a.copy(exported[0].Line); err != nil {
 			a.warnf("Couldn't copy the key: %v", err)
 		} else {
 			a.successf("Copied to the clipboard\n")
@@ -81,54 +66,17 @@ func (a *app) cmdExport(args []string) int {
 		a.notef("Two keys, so nothing was copied. Copy one with --auth or --signing.\n")
 	}
 
-	title := keyTitle(acc)
+	title := ops.KeyTitle(acc)
 	for _, h := range acc.Hosts {
 		a.printf("%s\n", ui.Accent.Render(h))
 		for _, k := range exported {
-			use := hosts.Use{Auth: k.auth, Signing: k.signing}
-			file := cmpOr(k.key.Public().Map(a.env.Shorten).PublicPath(), "<the public key file>")
-			for i, step := range a.github.Steps(h, use, title, file) {
+			file := cmpOr(k.Key.Public().Map(a.env.Shorten).PublicPath(), "<the public key file>")
+			for i, step := range a.github.Steps(h, k.Use, title, file) {
 				a.printf("  %d. %s\n", i+1, step)
 			}
 		}
 		a.printf("\n")
 	}
-	return 0
-}
-
-// keyTitle names a key on a host's settings page: the account and this machine.
-func keyTitle(acc *accounts.Account) string {
-	host, _ := os.Hostname()
-	return fmt.Sprintf("doppel: %s (%s)", acc.ID, strings.TrimSuffix(host, ".local"))
-}
-
-// keysToExport picks the keys export shows. A key used for both logging in
-// and signing is shown once.
-func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([]exportedKey, error) {
-	auth, signing := acc.AuthKey.Map(a.env.Expand), acc.SigningKey.Map(a.env.Expand)
-	switch {
-	case onlyAuth && auth == "":
-		return nil, fmt.Errorf("account %s has no auth key", acc.ID)
-	case onlySigning && signing == "":
-		return nil, fmt.Errorf("account %s doesn't sign", acc.ID)
-	case auth == "" && signing == "":
-		return nil, fmt.Errorf("account %s has no keys yet; add one with `doppel edit %s --generate-auth-key --sign-with-auth-key`", acc.ID, acc.ID)
-	}
-	same := auth.SameKey(signing)
-	var out []exportedKey
-	if auth != "" && !onlySigning {
-		out = append(out, exportedKey{key: auth, auth: true, signing: same && !onlyAuth})
-	}
-	if signing != "" && !onlyAuth && (!same || len(out) == 0) {
-		out = append(out, exportedKey{key: signing, signing: true})
-	}
-	return out, nil
-}
-
-// publicName names a key's public half in messages: its .pub file,
-// "~/"-shortened, or an inline key.
-func (a *app) publicName(key keys.Ref) string {
-	return key.Public().Map(a.env.Shorten).Display()
 }
 
 // copyToClipboard puts text on the clipboard: through the terminal (OSC 52,

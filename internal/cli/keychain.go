@@ -68,27 +68,3 @@ func (a *app) rememberPassphrases(newKeys []ops.NewKey, assumeYes bool) {
 	}
 	a.notef("ssh reads passphrases from the Keychain for hosts with `UseKeychain yes` and `AddKeysToAgent yes` in ~/.ssh/config; `doppel doctor` checks them. Signing only uses keys in the agent: after logging in, `ssh-add --apple-load-keychain` puts them back.")
 }
-
-// keychainHints says how to stop macOS asking for passphrases in the
-// terminal: for each of keyPaths that has one and isn't in the agent, the
-// command that keeps it in the Keychain.
-func (a *app) keychainHints(refs ...keys.Ref) {
-	if !a.macKeychain() {
-		return
-	}
-	seen := map[string]bool{}
-	for _, key := range refs {
-		private := key.PrivatePath()
-		if private == "" || seen[private] {
-			continue
-		}
-		seen[private] = true
-		path := key.Map(a.env.Expand)
-		if keys.CheckProtection(path) != keys.Encrypted {
-			continue
-		}
-		if loaded, _ := keys.InAgent(path); !loaded {
-			a.notef("  %s isn't in your agent, so macOS asks for its passphrase. Keep it in the Keychain: %s", private, a.loadCommand(key))
-		}
-	}
-}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/testenv"
 )
@@ -172,5 +173,45 @@ func TestSaveDryRun(t *testing.T) {
 		if strings.HasSuffix(c.Path, "allowed_signers") && !strings.Contains(string(c.New), "<the key generated at ~/.ssh/id_ed25519_work>") {
 			t.Errorf("allowed_signers shows no placeholder:\n%s", c.New)
 		}
+	}
+}
+
+func TestExportKeys(t *testing.T) {
+	s, ctx, _ := newContext(t, nil)
+	s.Key("id_work", "jane@acme.com", "")
+	s.Key("id_sign", "jane@acme.com", "")
+	line := strings.TrimSpace(s.Read(".ssh/id_sign.pub"))
+
+	same := &accounts.Account{ID: "work", AuthKey: "~/.ssh/id_work", SigningKey: "~/.ssh/id_work.pub"}
+	got, err := ops.ExportKeys(ctx, same, false, false)
+	if err != nil || len(got) != 1 || got[0].Purpose() != "Auth and signing key" || got[0].Line != strings.TrimSpace(s.Read(".ssh/id_work.pub")) {
+		t.Errorf("one key for both uses: %+v, %v", got, err)
+	}
+
+	inline := &accounts.Account{ID: "work", AuthKey: "~/.ssh/id_work", SigningKey: keys.Ref(keys.LiteralPrefix + line)}
+	got, err = ops.ExportKeys(ctx, inline, false, true)
+	if err != nil || len(got) != 1 || got[0].Line != line || ops.PublicName(ctx, got[0].Key) != "inline ssh-ed25519 "+strings.Fields(line)[1][:16]+"…" {
+		t.Errorf("an inline signing key: %+v, %v", got, err)
+	}
+
+	if _, err := ops.ExportKeys(ctx, &accounts.Account{ID: "bare"}, false, false); err == nil || !strings.Contains(err.Error(), "has no keys yet") {
+		t.Errorf("an account without keys: %v", err)
+	}
+}
+
+func TestWhoamiOutsideARepo(t *testing.T) {
+	s, ctx, _ := newContext(t, nil)
+	s.Mkdir("work")
+	list := []*accounts.Account{
+		{ID: "personal", Default: true},
+		{ID: "work", Folders: []string{"~/work/"}},
+	}
+	id, err := ops.Whoami(ctx, list, s.Path("work/new-clone"))
+	if err != nil || id.InRepo || id.Exists || id.NewRepoID != "work" || id.NewRepoRule != "folder ~/work/" {
+		t.Errorf("Whoami = %+v, %v", id, err)
+	}
+	id, err = ops.Whoami(ctx, list, s.Path("elsewhere"))
+	if err != nil || id.NewRepoID != "personal" || id.NewRepoRule != "default account" {
+		t.Errorf("Whoami = %+v, %v", id, err)
 	}
 }

@@ -50,7 +50,9 @@ func (a *app) loadForWrite(w writeFlags) ([]*accounts.Account, error) {
 func (a *app) opsContext(w writeFlags) ops.Context {
 	return ops.Context{
 		Env: a.env, Cwd: a.cwd,
-		Confirm: func(question string) error { return a.confirm(question, w.assumeYes()) },
+		Confirm:  func(question string) error { return a.confirm(question, w.assumeYes()) },
+		GitHub:   a.github,
+		Keychain: a.macKeychain,
 	}
 }
 

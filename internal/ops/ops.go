@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/hosts"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/plan"
@@ -26,7 +27,14 @@ type Context struct {
 	// to another account. An error stops the operation; it should answer
 	// yes on its own for --yes, and fail without a terminal to ask on.
 	Confirm func(question string) error
+	// GitHub tells which hosts are GitHub, asking gh once per host.
+	GitHub *hosts.GitHub
+	// Keychain reports whether passphrases can be kept in the macOS
+	// Keychain: this is a Mac, and its ssh is Apple's. nil means no.
+	Keychain func() bool
 }
+
+func (ctx Context) keychain() bool { return ctx.Keychain != nil && ctx.Keychain() }
 
 // Change is an operation worked out against the loaded accounts, ready for
 // Save.
