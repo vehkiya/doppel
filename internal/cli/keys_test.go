@@ -61,15 +61,28 @@ func TestAllowedSignersKeepsOtherEntries(t *testing.T) {
 		t.Fatalf("allowed_signers:\n%s", signers)
 	}
 
+	// An email change keeps the old one only for older signatures (DOP-6).
 	s.mustRun("edit", "work", "--email", "jane@acme.io")
 	signers = s.Read(".ssh/allowed_signers")
-	if strings.Contains(signers, "jane@acme.com") || !strings.Contains(signers, "jane@acme.io namespaces") {
+	if !strings.HasPrefix(signers, teammate) || strings.Contains(signers, `jane@acme.com namespaces="git" `) ||
+		!strings.Contains(signers, `jane@acme.com namespaces="git",valid-before=`) || !strings.Contains(signers, `jane@acme.io namespaces="git" `) {
 		t.Errorf("entry not updated after an email change:\n%s", signers)
 	}
 
 	s.mustRun("edit", "work", "--no-signing")
-	if got := s.Read(".ssh/allowed_signers"); got != teammate {
-		t.Errorf("allowed_signers after --no-signing:\n%q", got)
+	signers = s.Read(".ssh/allowed_signers")
+	trusted := 0 // jane's entries without a time limit
+	for _, line := range strings.Split(signers, "\n") {
+		if strings.HasPrefix(line, "jane@") && !strings.Contains(line, "valid-before") {
+			trusted++
+		}
+	}
+	if !strings.HasPrefix(signers, teammate) || strings.Count(signers, "valid-before") != 2 || trusted != 0 {
+		t.Errorf("allowed_signers after --no-signing:\n%s", signers)
+	}
+	// Git still reads the file, for the older commits.
+	if got := s.GitConfig(s.GitInit("repo"), "gpg.ssh.allowedSignersFile"); got != "~/.ssh/allowed_signers" {
+		t.Errorf("gpg.ssh.allowedSignersFile = %q after --no-signing", got)
 	}
 	if got := s.GitConfig(s.GitInit("repo"), accounts.KeyCommitSign); got != "false" {
 		t.Errorf("commit.gpgsign = %q after --no-signing", got)

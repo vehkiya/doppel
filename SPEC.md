@@ -46,14 +46,14 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R1.2** Account fields:
   - **ID** (required, unique, `[a-z0-9-]+`)
   - **Name** (required): the commit author name
-  - **Email** (required): the commit author email
+  - **Email** (required): the commit author email. It's also the principal in `allowed_signers`, which reads commas and `*`, `?`, `!` as patterns, so those, quotes and spaces are refused.
   - **Hosts:** defaults to `github.com`; there can be several
   - **GitHub username** (optional): used for uploads and to check that keys log in as the right user
   - **Auth key** (optional)
   - **Signing key** (optional)
   - **Sign commits / sign tags:** both default to on when there's a signing key
   - **Folders**
-- **R1.3** Deleting an account removes its account file, its folders and its `allowed_signers` entry. It never deletes key files. If the account was the default, doppel asks in a terminal which account becomes the new default, or none. Without a terminal it leaves none and says how to pick one.
+- **R1.3** Deleting an account removes its account file, its folders and its `allowed_signers` entries, retired ones (R4.3) included: doppel stops trusting its keys. To keep verifying its old commits, keep a copy of its entries outside doppel's block. It never deletes key files. If the account was the default, doppel asks in a terminal which account becomes the new default, or none. Without a terminal it leaves none and says how to pick one.
 - **R1.4** Renaming an account (changing its ID) keeps everything else unchanged.
 - **R1.5 First run.** If the global Git config already has `user.name` and `user.email`, the add wizard for the first account offers to start from them. They may be set in a file the global config includes, as dotfile setups often do; doppel's own files are left out.
   - It also brings in any SSH signing setup (`gpg.format = ssh`, `user.signingkey`, `commit.gpgsign`, `tag.gpgsign`) and an auth key named with `-i` in `core.sshCommand`.
@@ -105,7 +105,14 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R4.1** Choice: none, the same key as the auth key, or a separate key (existing, custom path, or generated as `~/.ssh/id_ed25519_<account>_signing`).
 - **R4.2** Sets `gpg.format = ssh`, `user.signingkey = <key>.pub`, `commit.gpgsign` and `tag.gpgsign`. With no signing key, both `gpgsign` settings are explicitly `false`.
   - The signing key may also be written inline, `user.signingkey = key::ssh-ed25519 AAAA…`, as Git allows: R1.5 brings one in as it is, and a hand edit is kept. Its private half then lives in an agent. `allowed_signers`, `test`, `export` and `upload` use it like a key in a file.
-- **R4.3** `allowed_signers` has one entry per account (`<email> namespaces="git" <public key>`), kept inside a marked block that doppel owns. Entries outside the block, such as teammates' keys, are never touched. Changing an account's email or signing key updates its entry.
+- **R4.3** `allowed_signers` has one entry per signing account (`<email> namespaces="git" <public key>`), kept inside a marked block that doppel owns. Entries outside the block, such as teammates' keys, are never touched. Changing an account's email or signing key updates its entry.
+  - **Older commits keep verifying.** When an account changes its signing key or email, or stops signing, doppel keeps the old entry with `valid-before="<the time of the change>"`. A commit signed before then still shows "Good signature"; one signed with the old key afterwards isn't trusted.
+  - The account file holds them (`doppel.retiredSigner = <YYYYMMDDHHMMSS> <email> <key type> <key>`, §6.2), so `doctor --fix` or any other rewrite of the block keeps them. They're checked like any other field before they're written.
+  - doppel finds what to retire by comparing the block it wrote last with the accounts. An entry goes to the account that has its email or key now, or had them in the file it was loaded from, so changing both at once is covered, and so is a hand edit that `doctor --fix` then picks up.
+  - The time is local, without the `Z` that marks UTC, which OpenSSH 8.9 can't read. Git gives ssh-keygen each commit's time in local time too.
+  - Checking a signature at the commit's time needs Git 2.35 and OpenSSH 8.8. With older versions, retired entries are skipped and older commits stop verifying, as they did before retired entries existed.
+  - The new entry gets no `valid-after`: OpenSSH before 8.8 would skip it, and signing would stop verifying altogether.
+  - The index keeps pointing Git at the file while it holds only retired entries, after an account stops signing.
 - **R4.4** Uses the file in `gpg.ssh.allowedSignersFile` if the user set one in the global config, or in a file it includes (`[include]`, not `[includeIf]`). Otherwise it uses `~/.ssh/allowed_signers` and sets that option in the generated index.
   - doppel follows the includes itself, letting Git parse each file, so it can skip its own: the value the index sets isn't mistaken for the user's, and a damaged index can't stop doppel from rewriting it.
 - **R4.4a** If a signing key's public key can't be read when saving, doppel stops and names the fix (`doppel edit <id> --signing-key <key>` or `--no-signing`), rather than silently dropping that key from `allowed_signers`.
@@ -332,7 +339,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
   - Settings with a one-to-one Git equivalent are read back from the file, so hand edits to them stick: `user.name`, `user.email`, `user.signingkey` (the signing key's `.pub`), `commit.gpgsign`, `tag.gpgsign`.
   - One list in the code (`accounts.Managed`) names every managed key: its value, whether it's read back, and whether it's an identity setting (the ones R1.5, R6.3 and R7 look at). Adding a managed key means adding it there.
   - `core.sshCommand` combines several values, so it is always regenerated from `doppel.authKey`, and hand edits to it are overwritten.
-  - doppel's own fields live under `[doppel]`.
+  - doppel's own fields live under `[doppel]`. `doppel.retiredSigner` (R4.3) is read back too, and repeats.
 - **Other settings are kept.** Settings doppel doesn't manage, such as a per-account `pull.rebase`, are never touched, so an account file can carry any extra Git settings for that account.
 - The list-valued keys (`host`, `folder`) build up across includes, so doppel reads them from each account file directly with `git config --file`, never from a repo's combined config.
 

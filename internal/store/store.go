@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
@@ -21,6 +22,10 @@ type Options struct {
 	// PublicKey reads a signing key's public half. It defaults to reading the
 	// key file; a dry run substitutes placeholders for keys it would generate.
 	PublicKey func(key keys.Ref) (string, error)
+
+	// Now is when signers that are no longer used are retired; it
+	// defaults to time.Now.
+	Now func() time.Time
 
 	// Removed lists the accounts the command deletes. Save deletes the file
 	// of no other account, apart from the old file of one that was renamed,
@@ -86,6 +91,34 @@ func stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options)
 	if opts.PublicKey == nil {
 		opts.PublicKey = defaultPublicKey
 	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+
+	// Signers the accounts no longer use are kept, time-limited, in their
+	// account files, so they're worked out before the files are staged. The
+	// accounts are copied, so the caller's are left as they were.
+	signersPath, configured, err := SignersFile(env)
+	if err != nil {
+		return err
+	}
+	current, err := currentSigners(env, list, opts.PublicKey)
+	if err != nil {
+		return err
+	}
+	text, _, err := p.Content(signersPath)
+	if err != nil {
+		return err
+	}
+	retired := retire(env, list, opts.Removed, current, trustedSigners(string(text)), opts.PublicKey, opts.Now())
+	staged := make([]*accounts.Account, len(list))
+	for i, a := range list {
+		c := *a
+		c.Retired = retired[i]
+		staged[i] = &c
+	}
+	list = staged
+
 	targets := map[string]bool{}
 	for _, a := range list {
 		targets[env.AccountPath(a.ID)] = true
@@ -126,7 +159,7 @@ func stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options)
 		}
 	}
 
-	signers, err := stageSigners(env, p, list, opts.PublicKey)
+	signers, err := stageSigners(p, list, current, signersPath, configured)
 	if err != nil {
 		return err
 	}

@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vehkiya/doppel/internal/git"
 	"github.com/vehkiya/doppel/internal/keys"
@@ -34,6 +35,10 @@ type Account struct {
 	SigningKey  keys.Ref // public half of the signing key; "" when the account doesn't sign
 	SignCommits bool
 	SignTags    bool
+	// Retired lists signing keys and emails the account signed with before.
+	// allowed_signers keeps trusting them for signatures made until they
+	// were retired, so older commits still verify.
+	Retired []RetiredSigner
 
 	// File is the account file this account was loaded from, "" for a new
 	// account. It differs from the account's path after a rename.
@@ -59,6 +64,7 @@ const (
 	KeyCommitSign = "commit.gpgsign"
 	KeyTagSign    = "tag.gpgsign"
 	KeySSHCommand = "core.sshCommand"
+	KeyRetired    = "doppel.retiredSigner"
 )
 
 // DefaultHost is an account's host unless it names others.
@@ -111,6 +117,17 @@ var Managed = []ManagedKey{
 				a.Folders = append(a.Folders, f)
 			}
 		}},
+	{Key: KeyRetired, value: func(a *Account) []string {
+		var values []string
+		for _, r := range a.Retired {
+			values = append(values, r.String())
+		}
+		return values
+	}, read: func(a *Account, v []string) {
+		for _, value := range v {
+			a.Retired = append(a.Retired, parseRetired(value))
+		}
+	}},
 	{Key: KeyAuthKey, value: func(a *Account) []string { return optional(string(a.AuthKey)) },
 		read: func(a *Account, v []string) { a.AuthKey = keys.Ref(last(v)) }},
 	{Key: KeyName, Identity: true, value: func(a *Account) []string { return []string{a.Name} },
@@ -127,6 +144,55 @@ var Managed = []ManagedKey{
 		return []string{strconv.FormatBool(a.SigningKey != "" && a.SignTags)}
 	}, read: func(a *Account, v []string) { a.SignTags = ParseBool(last(v)) }},
 	{Key: KeySSHCommand, Identity: true, value: func(a *Account) []string { return []string{SSHCommand(a.AuthKey)} }},
+}
+
+// RetiredSigner is an email and signing key an account signed with before:
+// allowed_signers trusts it for signatures made up to Until. An account file
+// holds each as "doppel.retiredSigner = <until> <email> <key type> <key>".
+type RetiredSigner struct {
+	// Until is when it was retired, as ssh-keygen reads valid-before:
+	// YYYYMMDDHHMMSS in local time. OpenSSH 8.9 can't read the Z that would
+	// mark UTC, and Git gives ssh-keygen the commit's time in local time.
+	Until string
+	Email string
+	Key   string // "<type> <base64>", as ReadPublic returns it
+}
+
+// RetiredFormat is the layout of RetiredSigner.Until, for time.Format.
+const RetiredFormat = "20060102150405"
+
+func (r RetiredSigner) String() string {
+	return strings.TrimSpace(strings.Join([]string{r.Until, r.Email, r.Key}, " "))
+}
+
+// parseRetired reads a doppel.retiredSigner value. A value that doesn't
+// parse is kept as it is, for Validate to report.
+func parseRetired(v string) RetiredSigner {
+	f := strings.Fields(v)
+	if len(f) != 4 {
+		return RetiredSigner{Until: v}
+	}
+	return RetiredSigner{Until: f[0], Email: f[1], Key: f[2] + " " + f[3]}
+}
+
+var untilPattern = regexp.MustCompile(`^[0-9]{14}$`)
+
+// validate checks a retired signer before it's written into allowed_signers,
+// where a stray quote or space would change what the line means.
+func (r RetiredSigner) validate() error {
+	if !untilPattern.MatchString(r.Until) {
+		return errors.New("it should be <YYYYMMDDHHMMSS> <email> <key type> <key>")
+	}
+	if _, err := time.ParseInLocation(RetiredFormat, r.Until, time.Local); err != nil {
+		return fmt.Errorf("%s isn't a valid time", r.Until)
+	}
+	if err := ValidateEmail(r.Email); err != nil {
+		return err
+	}
+	if pub, err := keys.ReadPublic(keys.Ref(keys.LiteralPrefix + r.Key)); err != nil || pub != r.Key {
+		return fmt.Errorf("%q isn't an SSH public key", r.Key)
+	}
+	return nil
 }
 
 // IdentityKeys lists the managed Git settings that decide who commits, signs
@@ -319,9 +385,12 @@ func ValidateID(id string) error {
 	return nil
 }
 
-// ValidateEmail checks a commit email address.
+// ValidateEmail checks a commit email address. It's also the principal in
+// allowed_signers, which reads it as a comma-separated list of patterns, so
+// quotes, commas and the pattern characters * ? ! are refused: they would
+// trust a key for other principals.
 func ValidateEmail(email string) error {
-	if !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\n<>") {
+	if !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\r\n<>\",*?!") {
 		return fmt.Errorf("%q isn't a valid email address", email)
 	}
 	return nil
@@ -368,12 +437,17 @@ func (a *Account) Validate() error {
 	if err := ValidateGitHubUser(a.GitHubUser); err != nil {
 		return fmt.Errorf("account %s: %w", a.ID, err)
 	}
+	where := ""
+	if a.File != "" {
+		where = " in " + a.File
+	}
+	for _, r := range a.Retired {
+		if err := r.validate(); err != nil {
+			return fmt.Errorf("account %s: %s %q%s: %w (fix or remove that line in the account file)", a.ID, KeyRetired, r.String(), where, err)
+		}
+	}
 	for _, f := range a.Folders {
 		if err := paths.ValidateFolder(f); err != nil {
-			where := ""
-			if a.File != "" {
-				where = " in " + a.File
-			}
 			return fmt.Errorf("account %s: doppel.folder %q%s: %w (fix it in the account file, or run `doppel unbind`)", a.ID, f, where, err)
 		}
 	}
