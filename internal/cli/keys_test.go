@@ -186,6 +186,32 @@ func TestGenerateKeys(t *testing.T) {
 	}
 }
 
+// A save that can't be staged fails before any key is generated, so the
+// same command works once the cause is fixed.
+func TestKeysAreGeneratedOnlyOnceTheSaveCanStage(t *testing.T) {
+	s := newSandbox(t)
+	s.Key("id_personal", "jane@personal.dev", "")
+	s.addAccount("personal", "jane@personal.dev", "--auth-key", "~/.ssh/id_personal", "--sign-with-auth-key")
+	if err := os.Remove(s.Path(".ssh/id_personal.pub")); err != nil { // R4.4a: its signing key can't be read now
+		t.Fatal(err)
+	}
+
+	s.tty = true
+	args := []string{"add", "work", "--name", "Jane Doe", "--email", "jane@acme.com", "--generate-auth-key"}
+	if stderr := s.mustFail(1, args...); !strings.Contains(stderr, "account personal: signing key ~/.ssh/id_personal.pub") {
+		t.Errorf("add with an unreadable signing key: %s", stderr)
+	}
+	if s.Exists(".ssh/id_ed25519_work") || s.Exists(".ssh/id_ed25519_work.pub") {
+		t.Fatal("a save that couldn't stage still generated the key")
+	}
+
+	s.mustRun("edit", "personal", "--no-signing")
+	s.mustRun(args...)
+	if !s.Exists(".ssh/id_ed25519_work") {
+		t.Error("the retry didn't generate the key")
+	}
+}
+
 func TestDryRunDoesNotGenerateKeys(t *testing.T) {
 	s := newSandbox(t)
 	s.tty = true

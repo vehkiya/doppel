@@ -87,45 +87,89 @@ var ErrNeedsTerminal = errors.New("generating a key needs a terminal, so ssh-key
 
 // Save validates a change, generates its new keys, and writes it through
 // store.Save and a plan, or for a dry run works out what it would write.
+//
+// The change is staged with placeholders for its new keys before any key is
+// generated, so a change that can't be saved (an account's signing key that
+// can't be read, say) fails before the user picks a passphrase, and leaves
+// no key behind to trip up the next try.
 func Save(ctx Context, ch *Change, opts SaveOptions) (*Result, error) {
 	if err := accounts.ValidateAll(ctx.Env, ch.Accounts); err != nil {
 		return nil, err
 	}
-	storeOpts := store.Options{Removed: ch.Removed}
 	if opts.DryRun {
-		storeOpts.PublicKey = placeholders(ctx.Env, ch.NewKeys)
-	} else {
-		if len(ch.NewKeys) > 0 && opts.Generate == nil {
-			return nil, ErrNeedsTerminal
-		}
-		for _, k := range ch.NewKeys {
-			if err := opts.Generate(k); err != nil {
-				return nil, err
-			}
-		}
-		if opts.Lock != nil {
-			if err := opts.Lock(); err != nil {
-				return nil, err
-			}
+		return stage(ctx, ch, placeholders(ctx.Env, ch.NewKeys), preview)
+	}
+	if len(ch.NewKeys) > 0 {
+		if _, err := stage(ctx, ch, placeholders(ctx.Env, ch.NewKeys), check); err != nil {
+			return nil, err
 		}
 	}
+	if len(ch.NewKeys) > 0 && opts.Generate == nil {
+		return nil, ErrNeedsTerminal
+	}
+	for i, k := range ch.NewKeys {
+		if err := opts.Generate(k); err != nil {
+			return nil, keptKeys(ctx, ch.NewKeys[:i], err)
+		}
+	}
+	if opts.Lock != nil {
+		if err := opts.Lock(); err != nil {
+			return nil, keptKeys(ctx, ch.NewKeys, err)
+		}
+	}
+	res, err := stage(ctx, ch, nil, apply)
+	if err != nil {
+		return nil, keptKeys(ctx, ch.NewKeys, err)
+	}
+	return res, nil
+}
 
+// finish is what stage does with the plan it staged.
+type finish int
+
+const (
+	apply   finish = iota // write it
+	preview               // work out its changes, for a dry run
+	check                 // only see that it stages
+)
+
+// stage stages a change, reading public keys with publicKey (nil for the
+// key files), and finishes the plan as asked.
+func stage(ctx Context, ch *Change, publicKey func(keys.Ref) (string, error), then finish) (*Result, error) {
 	p := plan.New(ctx.Env.StagingDir())
 	defer p.Close()
-	if err := store.Save(ctx.Env, p, ch.Accounts, storeOpts); err != nil {
+	if err := store.Save(ctx.Env, p, ch.Accounts, store.Options{Removed: ch.Removed, PublicKey: publicKey}); err != nil {
 		return nil, err
 	}
-	res := &Result{Message: ch.Message, DryRun: opts.DryRun, NewKeys: ch.NewKeys, Warnings: ch.Warnings, Notes: ch.Notes}
+	res := &Result{Message: ch.Message, DryRun: then == preview, NewKeys: ch.NewKeys, Warnings: ch.Warnings, Notes: ch.Notes}
 	var err error
-	if opts.DryRun {
+	switch then {
+	case check:
+		return nil, nil
+	case preview:
 		res.Changes, err = p.Changes()
-	} else {
+	default:
 		res.Changes, err = p.Apply()
 	}
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+// keptKeys adds to err, from a save that failed after generating keys, that
+// the keys were kept (doppel never deletes keys) and how to use them on the
+// next try.
+func keptKeys(ctx Context, generated []NewKey, err error) error {
+	for _, k := range generated {
+		flag := "--auth-key"
+		if k.Purpose == "signing key" {
+			flag = "--signing-key"
+		}
+		short := ctx.Env.Shorten(k.Path)
+		err = fmt.Errorf("%w. The new %s %s was kept: use it with %s %s", err, k.Purpose, short, flag, short)
+	}
+	return err
 }
 
 // placeholders stands in for keys a dry run would generate, so the
