@@ -47,15 +47,25 @@ type answers struct {
 	Save                 bool
 
 	goingBack bool // the last key pressed moves back a page (trackDirection)
+
+	form        *huh.Form             // the full-screen wizard, for which field has focus
+	completions map[string]completion // the inputs that suggest paths, by field key
+}
+
+// filter sees every message before the full-screen wizard does: Tab accepts
+// a path suggestion, and the direction the user moves in is noted.
+func (ans *answers) filter(_ tea.Model, msg tea.Msg) tea.Msg {
+	msg = ans.completeOnTab(msg)
+	ans.trackDirection(msg)
+	return msg
 }
 
 // trackDirection notes, for every message the form gets, whether the user
-// is moving back. It's the form's message filter.
-func (ans *answers) trackDirection(_ tea.Model, msg tea.Msg) tea.Msg {
+// is moving back.
+func (ans *answers) trackDirection(msg tea.Msg) {
 	if k, ok := msg.(tea.KeyPressMsg); ok {
 		ans.goingBack = key.Matches(k, formKeyMap().Input.Prev)
 	}
-	return msg
 }
 
 // forward makes a page's check apply only when the user moves on. Huh
@@ -86,6 +96,9 @@ type step struct {
 func formKeyMap() *huh.KeyMap {
 	km := huh.NewDefaultKeyMap()
 	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"), key.WithHelp("esc", "cancel"))
+	// The wizard's filter turns Tab into Ctrl+E while a suggestion shows
+	// (completeOnTab), so that's the key to show.
+	km.Input.AcceptSuggestion.SetHelp("tab", "complete")
 	km.Select.Filter.SetEnabled(false)
 	km.MultiSelect.Filter.SetEnabled(false)
 	return km
@@ -120,7 +133,8 @@ func wizardForm(ans *answers, steps []step) *huh.Form {
 			groups[i] = groups[i].WithHideFunc(st.hide)
 		}
 	}
-	return huh.NewForm(groups...).WithKeyMap(formKeyMap()).WithProgramOptions(tea.WithFilter(ans.trackDirection))
+	ans.form = huh.NewForm(groups...).WithKeyMap(formKeyMap()).WithProgramOptions(tea.WithFilter(ans.filter))
+	return ans.form
 }
 
 // accountWizard walks through an account's settings, starting from acc: an
@@ -223,10 +237,11 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 	)
 
 	where := []huh.Field{
-		huh.NewInput().Key("folders").Title("Folders").
+		a.completePaths(ans, huh.NewInput().Key("folders").Title("Folders").
 			Description("Repos inside these folders use this account. Separate them with commas; leave empty for none").
 			Placeholder("~/projects/work").
 			Value(&ans.Folders).Validate(forward(ans, a.checkFolders)),
+			"folders", &ans.Folders, a.folderSuggestions),
 	}
 	if others > 0 {
 		where = append(where, huh.NewConfirm().Key("default").Title("Make it the default account?").
@@ -263,10 +278,11 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 		}},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
-				huh.NewInput().Key("auth-path").Title("Auth key file").
+				a.completePaths(ans, huh.NewInput().Key("auth-path").Title("Auth key file").
 					Description("A private key, or a .pub whose private key lives in an agent").
 					Placeholder("~/.ssh/id_ed25519").Value(&ans.AuthPath).
 					Validate(forward(ans, a.keyPathValidator(false))),
+					"auth-path", &ans.AuthPath, a.keySuggestions),
 			).Title("Keys")
 		}, hide: func() bool { return ans.Auth != keyPathEtc }},
 		{group: func() *huh.Group {
@@ -282,10 +298,11 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 		}},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
-				huh.NewInput().Key("signing-path").Title("Signing key file").
+				a.completePaths(ans, huh.NewInput().Key("signing-path").Title("Signing key file").
 					Description("The key's .pub has to be next to it").
 					Placeholder("~/.ssh/id_ed25519").Value(&ans.SigningPath).
 					Validate(forward(ans, a.keyPathValidator(true))),
+					"signing-path", &ans.SigningPath, a.keySuggestions),
 			).Title("Keys")
 		}, hide: func() bool { return ans.Signing != keyPathEtc }},
 		{group: func() *huh.Group {

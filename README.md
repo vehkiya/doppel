@@ -139,7 +139,7 @@ Commands that change files accept `--dry-run` and `--yes`. Set `ACCESSIBLE=1` fo
 | `U` | Update doppel, when a newer release is out |
 | `q` / `esc` | Quit |
 
-In the wizards, **Shift+Tab** goes back to an earlier page and **Esc** cancels without saving.
+In the wizards, **Shift+Tab** goes back to an earlier page and **Esc** cancels without saving. The folder and key-file inputs complete paths as you type: **Tab** accepts the suggestion shown.
 
 ---
 

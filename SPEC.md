@@ -222,6 +222,11 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - The key choices stay the same throughout. One that doesn't fit the other answers, such as signing with an auth key when there isn't one, or generating a key where a file already exists, is refused with the reason. The description says which file Generate creates.
   - Esc or Ctrl+C cancels from any page without saving; the same keys cancel every other prompt too.
   - The review page reflects the answers as they stand, including changes made after going back.
+  - The path inputs complete what's typed, as ghost text that Tab accepts. Without a suggestion, Tab moves on as in every other input; Enter always moves on.
+    - **Folders:** folders only, and only the last one after a comma, keeping the ones before it.
+    - **Key files:** SSH keys and folders to look in; in the home folder, `~/.ssh/` comes first.
+    - `~/` and paths relative to the current folder work. Hidden entries show once a `.` is typed. Names match case-sensitively, except on macOS, whose filesystem ignores case.
+    - Accessible prompts don't suggest anything.
 
   With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
 - **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers.

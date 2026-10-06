@@ -99,11 +99,21 @@ func (d *formDriver) focused() string {
 // newWizard builds the add wizard's form for a sandbox without accounts.
 func newWizard(t *testing.T) (*sandbox, *answers, *formDriver) {
 	t.Helper()
+	return newWizardAfter(t, nil)
+}
+
+// newWizardAfter is newWizard, with setup run on the sandbox first, for
+// example to create keys the wizard should find.
+func newWizardAfter(t *testing.T, setup func(s *sandbox)) (*sandbox, *answers, *formDriver) {
+	t.Helper()
 	s := newSandbox(t)
+	if setup != nil {
+		setup(s)
+	}
 	a := s.newApp(s.Home)
 	a.accessible = false
 	ans, steps := a.wizardSteps(nil, &accounts.Account{Hosts: []string{accounts.DefaultHost}}, true)
-	return s, ans, newFormDriver(t, wizardForm(ans, steps), ans.trackDirection)
+	return s, ans, newFormDriver(t, wizardForm(ans, steps), ans.filter)
 }
 
 func TestWizardGoesBack(t *testing.T) {
