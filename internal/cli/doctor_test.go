@@ -23,6 +23,7 @@ func doctorSandbox(t *testing.T) *sandbox {
 	s.Mkdir("projects/work")
 	s.addAccount("personal", "jane@personal.dev", "--auth-key", "~/.ssh/id_personal")
 	s.addAccount("work", "jane@acme.com", "--auth-key", "~/.ssh/id_work", "--sign-with-auth-key", "--github-user", "jane-acme", "--folder", "~/projects/work")
+	s.FakeAgent(s.Path(".ssh/id_personal"), s.Path(".ssh/id_work")) // signing needs the work key in the agent
 	return s
 }
 
@@ -30,10 +31,33 @@ func TestDoctorOnAHealthySetup(t *testing.T) {
 	s := doctorSandbox(t)
 	out := s.mustRun("doctor")
 	for _, want := range []string{"✓ Git ", "✓ OpenSSH ", "~/.gitconfig includes doppel's accounts", "doppel's files match the accounts",
-		"Auth key ~/.ssh/id_work (passphrase)", "Signs commits and tags with the auth key", "No problems found"} {
+		"Auth key ~/.ssh/id_work (passphrase, in agent)", "Signs commits and tags with the auth key", "No problems found"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output is missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// Signing with a key that has a passphrase needs it in the agent:
+// ssh-keygen never reads the macOS Keychain, so every commit would ask.
+func TestDoctorWantsTheSigningKeyInTheAgent(t *testing.T) {
+	for _, c := range []struct{ name, setup, want string }{
+		{"the agent doesn't hold it", "running",
+			"Signing key ~/.ssh/id_work.pub has a passphrase but isn't in your agent, so Git asks for it on every signed commit\n    ↳ Load it with `ssh-add ~/.ssh/id_work`"},
+		{"no agent", "none", "no ssh-agent is running to hold it"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := doctorSandbox(t)
+			if c.setup == "running" {
+				s.FakeAgent(s.Path(".ssh/id_personal")) // the work key, which signs, isn't in it
+			} else {
+				_ = os.Remove(s.Path("fake-bin/ssh-add"))
+			}
+			out := s.mustRun("doctor") // a warning
+			if !strings.Contains(out, c.want) || !strings.Contains(out, "0 problems, 1 warning\n") {
+				t.Errorf("doctor output is missing %q:\n%s", c.want, out)
+			}
+		})
 	}
 }
 

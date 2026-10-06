@@ -97,7 +97,7 @@ Print through `app.stdout` and `app.stderr`, which `ui.Writer` wraps. Lip Gloss 
 
 ### 2.5 Testing
 * Tests never touch the real home directory, Git config or ssh-agent. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` and `SSH_*` variable that could leak in a developer's own setup or open a passphrase dialog.
-* Make test keys with `Sandbox.Key` (real `ssh-keygen`, so signatures really verify). Never contact a real host: stand in for `ssh` with `Sandbox.FakeSSH`.
+* Make test keys with `Sandbox.Key` (real `ssh-keygen`, so signatures really verify). Never contact a real host: stand in for `ssh` with `Sandbox.FakeSSH`. Stand in for an agent with `Sandbox.FakeAgent`; the sandbox clears `SSH_AUTH_SOCK`, so otherwise none is running.
 * Never call the real `gh`. `testenv.New` puts a `gh` signed in nowhere first on `PATH` and clears every `GH_*` and `GITHUB_*` variable. Upload tests install the `fakeGH` script instead, whose state (signed-in users, scopes, keys) lives in files in the sandbox. To test a missing tool, narrow `PATH` with `Sandbox.OnlyCommands`.
 * `doctor` must stay read-only without `--fix`: it stages its checks in a plan and only applies the plan with `--fix`.
 * Test wizards by setting `s.tty = true` and scripting `s.stdin` with `script(...)`, one line per prompt (empty for the default). The sandbox runs forms in accessible mode.

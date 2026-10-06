@@ -231,6 +231,9 @@ func (c *checker) account(acc *accounts.Account) {
 			c.key("Signing key", acc.SigningKey)
 		}
 	}
+	if acc.SigningKey != "" {
+		c.signingAgent(acc.SigningKey)
+	}
 
 	for _, f := range acc.Folders {
 		if !paths.FileExists(env.Expand(f)) {
@@ -299,6 +302,31 @@ func (c *checker) key(label string, key keys.Ref) {
 			status += ", in agent"
 		}
 		c.ok("%s %s (%s)", label, name, status)
+	}
+}
+
+// signingAgent checks that a signing key with a passphrase is in the agent.
+// ssh-keygen signs with the agent's copy; without one it asks for the
+// passphrase on every signed commit, and never reads the macOS Keychain
+// (UseKeychain is ssh's alone), so unlike logging in, nothing else can
+// supply it.
+func (c *checker) signingAgent(key keys.Ref) {
+	path := key.Map(c.Env.Expand)
+	if keys.CheckProtection(path) != keys.Encrypted {
+		return
+	}
+	load := keys.LoadCommand(key, c.Keychain)
+	switch loaded, running := keys.InAgent(path); {
+	case loaded:
+	case !running:
+		c.warn("Start ssh-agent (eval \"$(ssh-agent)\" in your shell profile), then run `"+load+"`",
+			"Signing key %s has a passphrase, and no ssh-agent is running to hold it, so Git asks for it on every signed commit", key.Display())
+	default:
+		fix := "Load it with `" + load + "`"
+		if c.Keychain {
+			fix += "; after logging in, `ssh-add --apple-load-keychain` puts it back"
+		}
+		c.warn(fix, "Signing key %s has a passphrase but isn't in your agent, so Git asks for it on every signed commit", key.Display())
 	}
 }
 
