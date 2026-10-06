@@ -84,6 +84,9 @@ func (a *app) cmdWhoami(args []string) int {
 			switch {
 			case login.Skipped:
 				a.row("Login", ui.Dim.Render(login.Detail))
+				if login.Fix != "" {
+					a.row("", ui.Dim.Render("↳ switch it to SSH: ")+login.Fix)
+				}
 			case login.OK:
 				a.row("Login", ui.OK.Render("✓")+" "+login.Label+": "+login.Detail)
 			default:

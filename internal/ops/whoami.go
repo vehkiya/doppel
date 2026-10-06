@@ -189,15 +189,20 @@ func isAccountFile(env *paths.Env, origin string) bool {
 // RemoteLogin tries acc's auth key on the host of the repo's remote, without
 // letting anything ask: a passphrase prompt in whoami would get in the way.
 // ok is false when the repo has no remote. A remote that isn't SSH, which
-// doppel's keys don't cover, comes back as a skipped check naming its kind.
+// doppel's keys don't cover, comes back as a skipped check naming its kind,
+// with the command that switches an HTTPS remote to SSH.
 func RemoteLogin(ctx Context, acc *accounts.Account, repo string) (c Check, ok bool) {
-	url := hosts.RemoteURL(repo)
-	if url == "" {
+	remote, ok := hosts.MainRemote(repo)
+	if !ok || remote.FetchURL == "" {
 		return Check{}, false
 	}
-	host := hosts.SSHHost(url)
+	host := hosts.SSHHost(remote.FetchURL)
 	if host == "" {
-		return Check{Skipped: true, Detail: "the remote uses " + hosts.Scheme(url) + ", which doppel's SSH keys don't cover"}, true
+		return Check{
+			Skipped: true,
+			Detail:  "the remote uses " + hosts.Scheme(remote.FetchURL) + ", which doppel's SSH keys don't cover",
+			Fix:     hosts.SwitchToSSH(remote, ""),
+		}, true
 	}
 	return Login(ctx, acc, host, true), true
 }

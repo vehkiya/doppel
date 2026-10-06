@@ -331,7 +331,7 @@ func TestWhoamiLogin(t *testing.T) {
 	for url, want := range map[string]string{
 		"git@github.com:acme/api.git":          "Login     ✓ github.com: logged in as jane-acme",
 		"ssh://git@github.com:22/acme/api.git": "Login     ✓ github.com: logged in as jane-acme",
-		"https://github.com/acme/api.git":      "the remote uses HTTPS",
+		"https://github.com/acme/api.git":      "↳ switch it to SSH: git remote set-url origin git@github.com:acme/api.git",
 		"/srv/git/api.git":                     "the remote uses a local path",
 	} {
 		_, _ = git.Run(repo, "remote", "remove", "origin")
