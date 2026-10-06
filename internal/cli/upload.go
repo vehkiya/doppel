@@ -48,7 +48,7 @@ func (a *app) cmdUpload(args []string) int {
 		exportArgs = append(exportArgs, "--signing")
 	}
 
-	apiHosts := a.githubAPIHosts(acc)
+	apiHosts := a.github.APIHosts(acc.Hosts)
 	if len(apiHosts) == 0 {
 		return a.fail(fmt.Errorf("none of account %s's hosts (%s) is GitHub as far as doppel can tell. If one runs GitHub Enterprise Server, sign gh in to it with `gh auth login -h <host>` and run this again; for other hosts, add the keys by hand with `doppel export %s`",
 			acc.ID, strings.Join(acc.Hosts, ", "), acc.ID))
@@ -91,18 +91,6 @@ func (a *app) offerGitHubUser(list []*accounts.Account, acc *accounts.Account, l
 	}
 	acc.GitHubUser = login
 	a.save(list, writeFlags{}, fmt.Sprintf("Updated account %s", acc.ID))
-}
-
-// githubHosts lists the hosts gh talks to for the account's GitHub hosts.
-// github.com and ssh.github.com share one.
-func (a *app) githubAPIHosts(acc *accounts.Account) []string {
-	var apiHosts []string
-	for _, h := range acc.Hosts {
-		if api, ok := a.apiHost(h); ok && !slices.Contains(apiHosts, api) {
-			apiHosts = append(apiHosts, api)
-		}
-	}
-	return apiHosts
 }
 
 // uploadTo adds keys to the account's user on one GitHub host. fallBack is

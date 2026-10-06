@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vehkiya/doppel/internal/hosts"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/testenv"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -77,6 +78,7 @@ func (s *sandbox) newApp(cwd string) *app {
 			s.copied = append(s.copied, text)
 			return nil
 		},
+		github: &hosts.GitHub{},
 	}
 }
 

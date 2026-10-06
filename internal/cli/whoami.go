@@ -8,6 +8,7 @@ import (
 
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/hosts"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
 )
@@ -226,13 +227,13 @@ func signingScope(commits, tags string) string {
 // loginRow tries the account's key on the repo's remote host, without
 // asking for anything: a passphrase prompt in whoami would get in the way.
 func (a *app) loginRow(acc *accounts.Account, repo string) {
-	url := remoteURL(repo)
+	url := hosts.RemoteURL(repo)
 	if url == "" {
 		return
 	}
-	host := sshHost(url)
+	host := hosts.SSHHost(url)
 	if host == "" {
-		a.row("Login", ui.Dim.Render("the remote uses "+urlScheme(url)+", which doppel's SSH keys don't cover"))
+		a.row("Login", ui.Dim.Render("the remote uses "+hosts.Scheme(url)+", which doppel's SSH keys don't cover"))
 		return
 	}
 	if ok, detail := a.checkLogin(acc, host, true); ok {
@@ -240,64 +241,4 @@ func (a *app) loginRow(acc *accounts.Account, repo string) {
 	} else {
 		a.row("Login", ui.Error.Render("✗")+" "+host+": "+detail+ui.Dim.Render(" (try `doppel test "+acc.ID+"`)"))
 	}
-}
-
-// remoteURL returns the URL of the repo's origin remote, or of its first
-// remote when there's no origin.
-func remoteURL(repo string) string {
-	out, err := git.Run(repo, "remote")
-	if err != nil {
-		return ""
-	}
-	remotes := strings.Fields(out)
-	if len(remotes) == 0 {
-		return ""
-	}
-	name := remotes[0]
-	for _, r := range remotes {
-		if r == "origin" {
-			name = r
-		}
-	}
-	url, err := git.Run(repo, "remote", "get-url", name)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(url)
-}
-
-// sshHost returns the host of an SSH remote URL (ssh://[user@]host[:port]/path
-// or the scp-like [user@]host:path), or "" for any other kind of remote.
-func sshHost(url string) string {
-	if rest, ok := strings.CutPrefix(url, "ssh://"); ok {
-		hostPart, _, _ := strings.Cut(rest, "/")
-		if at := strings.LastIndex(hostPart, "@"); at >= 0 {
-			hostPart = hostPart[at+1:]
-		}
-		if strings.HasPrefix(hostPart, "[") { // an IPv6 address
-			hostPart, _, _ = strings.Cut(strings.TrimPrefix(hostPart, "["), "]")
-			return hostPart
-		}
-		hostPart, _, _ = strings.Cut(hostPart, ":")
-		return hostPart
-	}
-	if strings.Contains(url, "://") {
-		return ""
-	}
-	colon := strings.Index(url, ":")
-	if colon <= 0 || strings.Contains(url[:colon], "/") {
-		return "" // a local path
-	}
-	hostPart := url[:colon]
-	if at := strings.LastIndex(hostPart, "@"); at >= 0 {
-		hostPart = hostPart[at+1:]
-	}
-	return hostPart
-}
-
-func urlScheme(url string) string {
-	if scheme, _, ok := strings.Cut(url, "://"); ok {
-		return strings.ToUpper(scheme)
-	}
-	return "a local path"
 }

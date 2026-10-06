@@ -12,6 +12,7 @@ import (
 	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/hosts"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -43,17 +44,12 @@ type app struct {
 	// which then stops the command: shell completion reads them this way.
 	collectFlags func(*flag.FlagSet)
 
-	// githubHosts remembers which hosts are GitHub, and the host gh talks to
-	// for each, since finding out may run gh. The browser forgets it each
-	// time it opens, so signing in to gh meanwhile counts.
-	githubHosts map[string]githubHost
+	// github remembers which hosts are GitHub, since finding out may run gh.
+	// The browser makes it forget each time it opens, so signing in to gh
+	// meanwhile counts.
+	github *hosts.GitHub
 	// appleSSH remembers whether the ssh on PATH is Apple's, once asked.
 	appleSSH *bool
-}
-
-type githubHost struct {
-	api string
-	ok  bool
 }
 
 func (a *app) printf(format string, args ...any) {
@@ -173,7 +169,8 @@ func newApp() (*app, error) {
 		keychain: func(path string) error {
 			return keys.AddToKeychain(path, os.Stdin, os.Stdout, os.Stderr)
 		},
-		copy: copyToClipboard,
+		copy:   copyToClipboard,
+		github: &hosts.GitHub{},
 	}, nil
 }
 

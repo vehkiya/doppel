@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/hosts"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/proc"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -84,7 +85,9 @@ func (a *app) cmdExport(args []string) int {
 	for _, h := range acc.Hosts {
 		a.printf("%s\n", ui.Accent.Render(h))
 		for _, k := range exported {
-			for i, step := range a.hostSteps(h, k, title) {
+			use := hosts.Use{Auth: k.auth, Signing: k.signing}
+			file := cmpOr(k.key.Public().Map(a.env.Shorten).PublicPath(), "<the public key file>")
+			for i, step := range a.github.Steps(h, use, title, file) {
 				a.printf("  %d. %s\n", i+1, step)
 			}
 		}
@@ -120,49 +123,6 @@ func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([
 		out = append(out, exportedKey{key: signing, signing: true})
 	}
 	return out, nil
-}
-
-// hostSteps says where to add a key on a host, and which key type to pick.
-func (a *app) hostSteps(host string, k exportedKey, title string) []string {
-	if api, ok := a.apiHost(host); ok {
-		steps := []string{"Open https://" + api + "/settings/ssh/new", "Title: " + title}
-		switch {
-		case k.auth && k.signing:
-			steps = append(steps, "Key type: Authentication Key. Then add it a second time with Key type: Signing Key.")
-		case k.auth:
-			steps = append(steps, "Key type: Authentication Key")
-		default:
-			steps = append(steps, "Key type: Signing Key")
-		}
-		return append(steps, "Paste the key and click Add SSH key.")
-	}
-
-	switch {
-	case strings.Contains(strings.ToLower(host), "gitlab"):
-		usage := "Signing"
-		switch {
-		case k.auth && k.signing:
-			usage = "Authentication & Signing"
-		case k.auth:
-			usage = "Authentication"
-		}
-		return []string{
-			"Open https://" + host + "/-/user_settings/ssh_keys",
-			"Paste the key and set Title: " + title,
-			"Usage type: " + usage,
-			"Click Add key.",
-		}
-	}
-
-	steps := []string{
-		"On Gitea, Forgejo or Codeberg, open https://" + host + "/user/settings/keys; on other hosts, find the SSH keys page in your settings.",
-		"Add the key under SSH Keys, named " + title + ".",
-	}
-	if k.signing {
-		file := cmpOr(k.key.Public().Map(a.env.Shorten).PublicPath(), "<the public key file>")
-		steps = append(steps, "For signed commits to show as verified, click Verify next to the key and sign the token shown: echo -n '<token>' | ssh-keygen -Y sign -n gitea -f "+file)
-	}
-	return steps
 }
 
 // publicName names a key's public half in messages: its .pub file,

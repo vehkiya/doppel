@@ -21,7 +21,7 @@ import (
 func (a *app) browse() int {
 	selected, status := "", ""
 	for {
-		a.githubHosts = nil // gh may have signed in to a host since the browser last opened
+		a.github.Forget() // gh may have signed in to a host since the browser last opened
 		list, err := accounts.Load(a.env)
 		if err != nil {
 			return a.fail(err)

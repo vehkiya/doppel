@@ -206,7 +206,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 
 	sshDir := filepath.Join(a.env.Home, ".ssh")
 	discovered := keys.Discover(sshDir)
-	anyGitHub := func() bool { return slices.ContainsFunc(splitList(ans.Hosts), a.isGitHub) }
+	anyGitHub := func() bool { return a.github.Any(splitList(ans.Hosts)) }
 	prevID, prevName, prevEmail := acc.ID, acc.Name, acc.Email
 
 	var identity []huh.Field
@@ -501,7 +501,7 @@ func (a *app) applyAnswers(ans *answers, acc *accounts.Account) wizardResult {
 	}
 	// The GitHub username page only shows for a GitHub host. When it's
 	// hidden, its answer (perhaps left half-typed by going back) doesn't count.
-	if slices.ContainsFunc(acc.Hosts, a.isGitHub) {
+	if a.github.Any(acc.Hosts) {
 		acc.GitHubUser = strings.TrimSpace(ans.GitHubUser)
 	}
 
