@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -144,13 +144,9 @@ func New(opts Options) Model {
 			selected = i
 		}
 	}
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(ui.ColorCoral).BorderLeftForeground(ui.ColorPurple).Bold(true)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(ui.ColorWhite).BorderLeftForeground(ui.ColorPurple)
-
-	l := list.New(items, delegate, 80, 20)
+	l := list.New(items, list.NewDefaultDelegate(), 80, 20)
 	l.Title = "doppel"
-	l.Styles.Title = titleStyle
+	styleList(&l, true)
 	l.SetStatusBarItemName("account", "accounts")
 	keys := newKeyMap()
 	// The short help line has to fit 80 columns; ? shows the rest.
@@ -172,13 +168,27 @@ func New(opts Options) Model {
 		loadKeyInfo: opts.LoadKeyInfo, checkingKeys: opts.LoadKeyInfo != nil}
 }
 
+// styleList gives the list doppel's colors, over the defaults for a dark or
+// light terminal. It starts dark and changes once the terminal says
+// otherwise (tea.BackgroundColorMsg).
+func styleList(l *list.Model, isDark bool) {
+	delegate := list.NewDefaultDelegate()
+	delegate.Styles = list.NewDefaultItemStyles(isDark)
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(ui.ColorCoral).BorderLeftForeground(ui.ColorPurple).Bold(true)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(ui.ColorWhite).BorderLeftForeground(ui.ColorPurple)
+	l.SetDelegate(delegate)
+	l.Styles = list.DefaultStyles(isDark)
+	l.Styles.Title = titleStyle
+}
+
 // Action returns what the user picked; a zero Action means quit.
 func (m Model) Action() Action { return m.action }
 
-// Init starts loading key details and the update check, and clears the
-// starting status message after a moment.
+// Init asks for the terminal's background color, starts loading key
+// details and the update check, and clears the starting status message
+// after a moment.
 func (m Model) Init() tea.Cmd {
-	var cmds []tea.Cmd
+	cmds := []tea.Cmd{tea.RequestBackgroundColor}
 	if load := m.loadKeyInfo; load != nil {
 		cmds = append(cmds, func() tea.Msg { return keyInfoMsg(load()) })
 	}
@@ -201,6 +211,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		return m, nil
 
+	case tea.BackgroundColorMsg:
+		styleList(&m.list, msg.IsDark())
+		return m, nil
+
 	case keyInfoMsg:
 		m.info, m.checkingKeys = msg, false
 		return m, nil
@@ -221,7 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(listWidth, max(m.height-3, 5))
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.confirmDelete {
 			m.confirmDelete = false
 			if msg.String() == "y" || msg.String() == "Y" {
@@ -286,9 +300,16 @@ func (m Model) selected() *accounts.Account {
 	return nil
 }
 
-// View draws the list and the selected account's details: side by side on
+// View draws the browser on the alternate screen.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+// render draws the list and the selected account's details: side by side on
 // wide terminals, one at a time (Tab switches) on narrow ones.
-func (m Model) View() string {
+func (m Model) render() string {
 	if m.quitting {
 		return ""
 	}
@@ -450,7 +471,7 @@ func statusLine(status string) string {
 
 // Run opens the browser and returns the action the user picked.
 func Run(opts Options) (Action, error) {
-	final, err := tea.NewProgram(New(opts), tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(New(opts)).Run()
 	if err != nil {
 		return Action{}, err
 	}

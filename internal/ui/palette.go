@@ -2,7 +2,7 @@
 // renderer behind --dry-run.
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // The doppel palette, shared with sshx (see AGENTS.md).
 var (

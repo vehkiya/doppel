@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/term"
 	"github.com/vehkiya/doppel/internal/git"
 	"github.com/vehkiya/doppel/internal/keys"
@@ -153,8 +153,8 @@ func newApp() (*app, error) {
 		env:         env,
 		cwd:         cwd,
 		stdin:       bufio.NewReader(os.Stdin),
-		stdout:      os.Stdout,
-		stderr:      os.Stderr,
+		stdout:      ui.Writer(os.Stdout),
+		stderr:      ui.Writer(os.Stderr),
 		interactive: term.IsTerminal(os.Stdin.Fd()),
 		browsable:   term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()),
 		// ACCESSIBLE turns forms into plain prompts for screen readers, as in other Charm tools.

@@ -23,7 +23,7 @@ Before committing, all of the following must pass cleanly:
 * Export only what another package needs. The end-to-end tests in `cli` count as another package: they use `store`'s include helpers to check the global config. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
-* doppel is a single static binary: the Go standard library plus the Charm libraries (`bubbletea`, `bubbles`, `huh`, `lipgloss`). No CGO.
+* doppel is a single static binary: the Go standard library plus the Charm libraries (`bubbletea`, `bubbles`, `huh` and `lipgloss`, all v2 from `charm.land`, and the `charmbracelet/x` and `colorprofile` helpers they're built on). No CGO.
 * At runtime it calls `git`, `ssh`, `ssh-keygen`, `ssh-add` and, optionally, `gh` (2.40 or newer). Nothing else.
 * **Run tools through `proc.Command`** with a time limit (`proc.Local` or `proc.Network`), so a hung agent or a silent server can't freeze doppel. Only a command that may ask the user something, such as `ssh-keygen` asking for a passphrase, runs without one.
 * **Don't fetch a token to answer a question:** whether a host is GitHub comes from `gh auth status`, which never prints one, and `cli` remembers the answer for the rest of the command (`app.apiHost`).
@@ -64,7 +64,7 @@ Before committing, all of the following must pass cleanly:
 * A wizard is a list of `step`s run as **one** Huh form (`wizardForm`), so Shift+Tab goes back to any earlier page and Esc cancels from any page.
   * **Hidden pages:** a page that only sometimes applies has a `hide` func.
   * **Answers that change other pages:** descriptions and the review follow earlier answers (`liveDescription`, `liveNote`).
-  * **A select's choices never change** while the wizard runs. Huh v1 scrolls a select so its chosen option is at the top whenever its options change, hiding the ones above it, so don't use `OptionsFunc`. A choice that doesn't fit the other answers, such as signing with an auth key there isn't, is refused by the page's check.
+  * **A select's choices never change** while the wizard runs, so don't use `OptionsFunc`. When the options change, Huh keeps the cursor where it was, so hiding the chosen option would quietly answer with whichever one took its place. A choice that doesn't fit the other answers, such as signing with an auth key there isn't, is refused by the page's check.
   * **Checks apply going forward** (`forward`): Huh checks a field again as it loses focus and won't leave a page with an error in either direction, so without it a half-typed answer would trap the user on its page. The Save button checks every shown page once more (`checkAnswers`), and a hidden page's answer doesn't count.
   * **Note text is escaped** (`liveNote`, `escapeNote`): Huh reads `_`, `*` and `` ` `` in a note as formatting, which would swallow them from paths and names. Accessible mode prints notes as they are.
   * **Accessible mode:** Huh's accessible mode ignores hidden pages and doesn't load live text, so there `runSteps` asks each visible page in turn. Pages are built by functions, so each one sees the answers before it.
@@ -81,6 +81,8 @@ Keep styling consistent with sshx's palette (`internal/ui/palette.go`):
 * **Success / Badges:** Spring Green (`#5FD787`)
 * **Warnings:** Amber (`#FFAF00`)
 * **Errors / Destructive actions:** Red (`#FF4672`)
+
+Print through `app.stdout` and `app.stderr`, which `ui.Writer` wraps. Lip Gloss v2 always styles text for a full-color terminal and leaves it to the writer to drop what the output can't show, so styled text written straight to `os.Stdout` would put escape codes into pipes and files. Tests that capture output wrap their buffers the same way.
 
 ### 2.5 Testing
 * Tests never touch the real home directory, Git config or ssh-agent. Use `testenv.New` (wrapped by `newSandbox` in `cli` tests), which points `HOME` and `XDG_CONFIG_HOME` at a temp directory and clears every `GIT_*` and `SSH_*` variable that could leak in a developer's own setup or open a passphrase dialog.

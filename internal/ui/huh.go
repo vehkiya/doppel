@@ -1,13 +1,18 @@
 package ui
 
 import (
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
-// HuhTheme styles doppel's wizards like sshx's.
-func HuhTheme() *huh.Theme {
-	t := huh.ThemeBase()
+// HuhTheme styles doppel's wizards like sshx's. The palette is the same on
+// dark and light backgrounds.
+func HuhTheme() huh.Theme {
+	return huh.ThemeFunc(huhStyles)
+}
+
+func huhStyles(isDark bool) *huh.Styles {
+	t := huh.ThemeBase(isDark)
 
 	// Left border indicator on focused fields
 	t.Focused.Base = t.Focused.Base.BorderForeground(ColorPurple)
