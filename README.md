@@ -56,17 +56,52 @@ Login     ✓ github.com: logged in as jane-acme
 
 ## 📦 Installation
 
+doppel runs on Linux and macOS. It needs Git 2.34 or newer and OpenSSH 8.2 or newer. `gh` 2.40 or newer is optional; it's only needed for `doppel upload`.
+
+### Release binary
+
+Each [release](https://github.com/vehkiya/doppel/releases) has a prebuilt binary for Linux and macOS, on Intel (`amd64`) and ARM (`arm64`, including Apple silicon). These commands download the latest one for your machine, check it against the release's checksums, and install it in `~/.local/bin`:
+
+```bash
+os=$(uname -s | tr '[:upper:]' '[:lower:]')        # linux or darwin
+arch=$(uname -m)
+case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+archive="doppel_${os}_${arch}.tar.gz"
+
+cd "$(mktemp -d)"
+curl -fsSLO "https://github.com/vehkiya/doppel/releases/latest/download/$archive"
+curl -fsSLO "https://github.com/vehkiya/doppel/releases/latest/download/checksums.txt"
+grep " $archive\$" checksums.txt | sha256sum -c -     # macOS without sha256sum: shasum -a 256 -c -
+```
+
+Go on only if that printed `doppel_<os>_<arch>.tar.gz: OK`. Then unpack it and install the binary:
+
+```bash
+tar -xzf "$archive"
+mkdir -p ~/.local/bin
+install -m 0755 doppel_*/doppel ~/.local/bin/doppel
+doppel version
+```
+
+- **`doppel: command not found`?** Add `~/.local/bin` to your `PATH`, for example with `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`.
+- **For every user on the machine:** install it with `sudo install -m 0755 doppel_*/doppel /usr/local/bin/doppel` instead. `doppel update` then needs `sudo` too, since it replaces the binary where it is.
+- **A specific version:** replace `latest/download` with `download/<version>`, such as `download/v0.8.1`. The versioned archives, such as `doppel_v0.8.1_linux_amd64.tar.gz`, hold the same binary.
+- **Downloaded in a browser on macOS?** macOS may refuse to open it. Clear the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/doppel`. Files downloaded with `curl` aren't flagged.
+- **Checking more:** to also check the signature on `checksums.txt` and GitHub's build provenance, see [SECURITY.md](SECURITY.md#verifying-a-release).
+
+Once installed, `doppel update` keeps it current, and only installs releases signed with doppel's release key.
+
+### With Go
+
 ```bash
 go install github.com/vehkiya/doppel@latest
 ```
 
-Or download a release binary for Linux or macOS from [Releases](https://github.com/vehkiya/doppel/releases). Each release's checksums are signed; [SECURITY.md](SECURITY.md#verifying-a-release) shows how to verify a download.
+This builds doppel from source into `$(go env GOPATH)/bin`, which needs to be on your `PATH`.
 
-Once installed, `doppel update` keeps it current.
+### With configsh
 
 With [configsh](https://github.com/vehkiya/configsh), `./setup.sh` installs doppel and sets up the `dop` alias.
-
-doppel needs Git 2.34 or newer and OpenSSH 8.2 or newer. `gh` 2.40 or newer is optional; it's only needed for `doppel upload`.
 
 ---
 
