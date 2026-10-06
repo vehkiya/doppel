@@ -59,14 +59,24 @@ jobs:
           tag_prefix: "v"
           major_pattern: "/!:|BREAKING CHANGE:/"
           minor_pattern: "/feat(\\(.+\\))?:/"
+          # docs commits don't change the binary, so they don't bump the
+          # version. A push with nothing but docs commits since the last tag
+          # comes out as version_type "none", and makes no release. A breaking
+          # "docs!:" still matches major_pattern.
+          ignore_commits_pattern: "/^docs(\\(.+\\))?:/"
           version_format: "${major}.${minor}.${patch}"
 
-      - name: Verify Tag Does Not Already Exist
+      - name: Verify There Is a New Version to Release
         id: check_tag
         if: steps.check_tip.outputs.is_latest == 'true'
         run: |
           VERSION="${{ steps.version.outputs.version_tag }}"
           if [ -z "$VERSION" ]; then
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ steps.version.outputs.version_type }}" = "none" ]; then
+            echo "::notice::Nothing to release: no commit since ${VERSION} needs a new version (only docs, or it is already released)."
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

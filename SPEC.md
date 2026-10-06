@@ -433,7 +433,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
 
 - `go install github.com/vehkiya/doppel@latest`, plus GitHub release binaries for Linux and macOS (amd64 and arm64), adapted from sshx's workflows.
   - **Validation:** every PR is linted and tested on Linux, tested on macOS (for `gitdir/i:` and its case-insensitive filesystem), and tested against Git 2.34 (Ubuntu 22.04).
-  - **Releases:** every merge to `main` that changes the version gets a release. The version comes from Conventional Commits: `feat` bumps the minor version, anything else the patch, and `!` or `BREAKING CHANGE` the major.
+  - **Releases:** every merge to `main` that changes the version gets a release. The version comes from Conventional Commits: `feat` bumps the minor version, `!` or `BREAKING CHANGE` the major, `docs` nothing, and anything else the patch. A merge with only `docs` commits since the last release makes no release; its changes ship with the next one.
   - **Verification:** releases carry SHA-256 checksums signed with the release key, and GitHub build provenance (`gh attestation verify`).
   - **Signing:** the signing key exists only as the `DOPPEL_SIGNING_KEY` secret in the `release` environment, which only `main` can deploy to. The workflow refuses to publish unsigned, or to sign with a key that isn't in `TrustedKeys`.
 - configsh's `build-tools.sh` installs doppel, and `.zshrc` adds `alias dop="doppel"`.
