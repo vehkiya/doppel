@@ -86,12 +86,17 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R3.2** Generation asks for a passphrase and warns, without blocking, if it's left empty.
   - `ssh-keygen` asks on the terminal, so generating needs one. Without a terminal, doppel stops and suggests generating the key yourself and passing it with `--auth-key` or `--signing-key`.
   - `--dry-run` doesn't generate anything. It says which key would be created, and the `allowed_signers` diff shows a placeholder where its public key would go.
+  - **After saving, so Git doesn't keep asking for the passphrase:**
+    - On macOS with Apple's `ssh`, doppel offers (default yes; `--yes` accepts) to run `ssh-add --apple-use-keychain <key>` for each new key with a passphrase. ssh-add asks for it once more, keeps it in the login Keychain and loads the key into the agent. doppel then says that ssh reads it back for hosts with `UseKeychain yes` and `AddKeysToAgent yes` in `~/.ssh/config` (which `doctor` checks), and that signing only uses keys in the agent, which `ssh-add --apple-load-keychain` refills after logging in.
+    - Elsewhere, or with another `ssh` (such as Homebrew's, which has no Keychain support), it suggests `ssh-add <key>`.
+    - **Why:** OpenSSH asks in the terminal unless `SSH_ASKPASS` names a dialog. On Linux, a desktop session usually sets one (for example `ksshaskpass`, which keeps the passphrase in KWallet). macOS has none, so the Keychain is how it remembers.
 - **R3.3** A key can be given as a `.pub` file only, when its private half lives in an agent (for example 1Password or a hardware key).
 - **R3.4** Stored as `doppel.authKey` and applied as `core.sshCommand = ssh -i <key> -o IdentitiesOnly=yes`. `IdentitiesOnly` stops ssh-agent from offering another account's key first; GitHub logs you in as whichever account owns the first key that works. An account without an auth key sets `core.sshCommand = ssh`, so it never inherits another account's key.
 - **R3.5** GitHub only lets a key belong to one account. doppel warns when two accounts that share a host use the same auth key.
 - **R3.6** Login check: for each host, run `ssh -T git@<host>` with the account's key and look for the expected username in the greeting.
-  - `doppel test` runs it, and lets ssh ask for a passphrase or whether to trust a new host.
+  - `doppel test` runs it, and lets ssh ask for a passphrase or whether to trust a new host. Without a terminal it asks nothing, as `whoami` does.
   - `whoami` runs it for the repo's remote host without letting ssh ask anything (`--offline` skips it). If the key has a passphrase and isn't loaded in the agent, it says so and suggests `ssh-add`, rather than reporting the key as rejected.
+  - On macOS with Apple's `ssh`, the suggestion is `ssh-add --apple-use-keychain <key>`, and `doppel test` in a terminal also names it under each account for every key with a passphrase that still isn't in the agent afterwards.
   - On GitHub, a login as a different user than the account's GitHub username counts as a failure. For example, GitHub replies "Hi `<username>`!", GitLab "Welcome to GitLab, `@<username>`!", and Gitea/Forgejo "Hi there, `<username>`!".
 
 ### R4. Signing key
@@ -150,6 +155,8 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 **Git and SSH**
 - Git is 2.34 or newer (checked before any command runs), and OpenSSH is 8.2 or newer, as Git needs to verify SSH signatures. *(problem)*
 - `GIT_SSH_COMMAND` and `GIT_SSH` aren't set, because they override every account. *(problem)*
+- On macOS, the `ssh` on `PATH` is Apple's, the only one that can keep passphrases in the Keychain. *(warning)*
+  - doppel asks `ssh -G -F /dev/null -o UseKeychain=yes` about a host that doesn't exist: other builds refuse the option, and nothing connects.
 
 **Git config**
 - The global Git config includes doppel's index. *(problem)*
@@ -168,6 +175,8 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 - **Folders:** every bound folder exists. *(warning)*
 - **SSH config:** `~/.ssh/config` doesn't offer another `IdentityFile` for one of the account's hosts. If the account's key were rejected, ssh would fall back to that key and could log in as someone else. *(warning)*
   - doppel finds these by comparing `ssh -G -F ~/.ssh/config <host>` with a host that doesn't exist, so `Include`, `Match` and wildcards count as ssh counts them, and nothing connects.
+- **Keychain (macOS with Apple's `ssh`):** when the auth key has a passphrase, `~/.ssh/config` sets `UseKeychain yes` and `AddKeysToAgent yes` for each of the account's hosts. Without the first, macOS asks for the passphrase in the terminal; without the second, ssh doesn't load the key into the agent, so signing with it asks. *(warning)*
+  - `AddKeysToAgent` comes from `ssh -G`. `ssh -G` doesn't print `UseKeychain`, so doppel reads that one setting from the file itself, as ssh would: the first value that applies wins, and `Host` blocks (with wildcards and `!`) and `Include` count. A `Match` block is taken to apply, so an unusual setup isn't reported as missing it.
 - **HTTPS remotes:** no repos in the account's folders fetch over HTTPS, which these keys don't cover. Reported only, never changed. *(warning)*
   - To stay quick on big trees, doppel looks three levels deep and skips hidden, `node_modules` and `vendor` folders.
 
@@ -348,10 +357,10 @@ Every account file sets every setting doppel manages, including a "reset" value 
 | `git` ≥ 2.34 | reading and writing config, `whoami` | yes |
 | `ssh-keygen` | generating keys, fingerprints, passphrase check, signing check | yes |
 | `ssh` | login check | yes |
-| `ssh-add` | agent status | no |
+| `ssh-add` | agent status; on macOS, keeping a new key's passphrase in the Keychain | no |
 | `gh` ≥ 2.40 | GitHub uploads | no (falls back to `export`) |
 
-- **Time limits:** every tool that can't be waiting for the user runs with a time limit (`proc.Command`): 15 seconds for local work (`git`, `ssh-keygen -y` and `-Y verify`, `ssh-add -l`, `ssh -G`, `ssh -V`, the clipboard tools), 60 seconds for anything that may use the network (`gh`, the batch-mode `ssh -T` login check). A tool that runs out is stopped, and the error names it. Generating a key, signing, and the interactive login check may ask for a passphrase, so they have no limit.
+- **Time limits:** every tool that can't be waiting for the user runs with a time limit (`proc.Command`): 15 seconds for local work (`git`, `ssh-keygen -y` and `-Y verify`, `ssh-add -l`, `ssh -G`, `ssh -V`, the clipboard tools), 60 seconds for anything that may use the network (`gh`, the batch-mode `ssh -T` login check). A tool that runs out is stopped, and the error names it. Generating a key, signing, `ssh-add --apple-use-keychain` and the interactive login check may ask for a passphrase, so they have no limit.
 - **The browser draws first:** it works out each key's status (passphrase, in agent) in the background, showing "checking…" until it has it.
 
 ### 6.6 Code and conventions

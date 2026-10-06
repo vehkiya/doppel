@@ -172,20 +172,15 @@ func OpenSSHVersion() (major, minor int, ok bool) {
 // handled as ssh handles them.
 func HostIdentityFiles(sshConfig, host string) []string {
 	files := func(h string) []string {
-		cmd, finish := proc.Command(proc.Local, "ssh", "-G", "-F", sshConfig, h)
-		out, err := cmd.Output()
-		if err := finish(err); err != nil {
-			return nil
-		}
 		var list []string
-		for _, line := range strings.Split(string(out), "\n") {
+		for _, line := range resolvedConfig(sshConfig, h) {
 			if f, ok := strings.CutPrefix(line, "identityfile "); ok {
 				list = append(list, strings.TrimSpace(f))
 			}
 		}
 		return list
 	}
-	everyone := files("doppel-no-such-host.invalid")
+	everyone := files(noSuchHost)
 	var extra []string
 	for _, f := range files(host) {
 		if !slices.Contains(everyone, f) {
@@ -193,4 +188,20 @@ func HostIdentityFiles(sshConfig, host string) []string {
 		}
 	}
 	return extra
+}
+
+// noSuchHost stands for a host no config entry names, to see what every
+// host gets.
+const noSuchHost = "doppel-no-such-host.invalid"
+
+// resolvedConfig returns the settings ssh would use for host, one
+// "keyword value" line each, as `ssh -G` prints them. It's nil when ssh
+// can't read the config.
+func resolvedConfig(sshConfig, host string) []string {
+	cmd, finish := proc.Command(proc.Local, "ssh", "-G", "-F", sshConfig, host)
+	out, err := cmd.Output()
+	if err := finish(err); err != nil {
+		return nil
+	}
+	return strings.Split(string(out), "\n")
 }

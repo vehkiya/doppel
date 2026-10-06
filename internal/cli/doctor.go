@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -95,6 +96,15 @@ func (a *app) cmdDoctor(args []string) int {
 	}
 	if !overridden {
 		r.ok("GIT_SSH_COMMAND and GIT_SSH aren't set")
+	}
+	if a.env.GOOS == "darwin" {
+		if a.macKeychain() {
+			r.ok("ssh is Apple's, so it can keep passphrases in the Keychain")
+		} else {
+			ssh, _ := exec.LookPath("ssh")
+			r.warn("Put /usr/bin ahead of it on your PATH, or keep your keys in an agent such as 1Password",
+				"ssh (%s) isn't Apple's, so it can't keep passphrases in the Keychain; macOS asks for them in the terminal", a.env.Shorten(ssh))
+		}
 	}
 
 	r.section("Git config")
@@ -199,6 +209,7 @@ func (a *app) doctorAccount(r *report, acc *accounts.Account, list []*accounts.A
 		}
 	} else {
 		a.doctorKey(r, "Auth key", acc.AuthKey)
+		a.doctorKeychain(r, acc)
 		if other, host := a.sharedAuthKey(acc, list); other != "" {
 			r.problem("Give each account a key of its own: doppel edit <id> --generate-auth-key",
 				"%s and %s use the same auth key on %s, so one of them logs in as the other", acc.ID, other, host)
@@ -281,6 +292,38 @@ func (a *app) doctorKey(r *report, label, key string) {
 			status += ", in agent"
 		}
 		r.ok("%s %s (%s)", label, key, status)
+	}
+}
+
+// doctorKeychain checks, on a Mac, that ssh keeps the passphrase of acc's
+// auth key in the Keychain and loads the key into the agent, so neither
+// Git nor signing asks for it in the terminal.
+func (a *app) doctorKeychain(r *report, acc *accounts.Account) {
+	if !a.macKeychain() || keys.CheckProtection(a.env.Expand(acc.AuthKey)) != keys.Encrypted {
+		return
+	}
+	cfg := filepath.Join(a.env.Home, ".ssh", "config")
+	for _, h := range acc.Hosts {
+		keychain, agent := keys.UsesKeychain(cfg, h), keys.AddsKeysToAgent(cfg, h)
+		var missing []string
+		if !keychain {
+			missing = append(missing, "UseKeychain yes")
+		}
+		if !agent {
+			missing = append(missing, "AddKeysToAgent yes")
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		fix := fmt.Sprintf("Add %s under `Host %s` (or `Host *`) in ~/.ssh/config, then run `%s` once",
+			strings.Join(missing, " and "), h, a.loadCommand(acc.AuthKey))
+		if !keychain {
+			r.warn(fix, "~/.ssh/config doesn't set %s for %s, so macOS asks for the passphrase of %s in the terminal",
+				strings.Join(missing, " or "), h, acc.AuthKey)
+		} else {
+			r.warn(fix, "~/.ssh/config doesn't set AddKeysToAgent for %s, so ssh doesn't load %s into the agent, and signing with it asks for its passphrase",
+				h, acc.AuthKey)
+		}
 	}
 }
 

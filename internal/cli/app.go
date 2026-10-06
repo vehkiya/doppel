@@ -33,6 +33,7 @@ type app struct {
 	browsable   bool // stdin and stdout are terminals, so the browser can open
 
 	generate func(path, comment string) error // creates a key, asking for its passphrase
+	keychain func(path string) error          // keeps a key's passphrase in the macOS Keychain, asking for it
 	copy     func(text string) error          // puts text on the clipboard
 
 	unlock func() // releases the write lock while this command holds it
@@ -41,6 +42,8 @@ type app struct {
 	// for each, since finding out may run gh. The browser forgets it each
 	// time it opens, so signing in to gh meanwhile counts.
 	githubHosts map[string]githubHost
+	// appleSSH remembers whether the ssh on PATH is Apple's, once asked.
+	appleSSH *bool
 }
 
 type githubHost struct {
@@ -161,6 +164,9 @@ func newApp() (*app, error) {
 		accessible: os.Getenv("ACCESSIBLE") != "",
 		generate: func(path, comment string) error {
 			return keys.Generate(path, comment, nil, os.Stdin, os.Stdout, os.Stderr)
+		},
+		keychain: func(path string) error {
+			return keys.AddToKeychain(path, os.Stdin, os.Stdout, os.Stderr)
 		},
 		copy: copyToClipboard,
 	}, nil

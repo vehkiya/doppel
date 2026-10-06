@@ -56,9 +56,7 @@ func (a *app) cmdTest(args []string) int {
 		}
 		if acc.SigningKey == "" {
 			a.printf("  %s %-12s %s\n", ui.Dim.Render("–"), "signing", ui.Dim.Render("off"))
-			continue
-		}
-		if reason := a.needsPassphrase(acc.SigningKey, !a.interactive); reason != "" {
+		} else if reason := a.needsPassphrase(acc.SigningKey, !a.interactive); reason != "" {
 			a.checkRow(false, "signing", reason)
 			failed = true
 		} else if err := keys.SignCheck(a.env.Expand(acc.SigningKey), acc.Email, signers); err != nil {
@@ -66,6 +64,10 @@ func (a *app) cmdTest(args []string) int {
 			failed = true
 		} else {
 			a.checkRow(true, "signing", "signed and verified as "+acc.Email)
+		}
+		// Without a terminal, the rows above already name the command.
+		if a.interactive {
+			a.keychainHints(acc.AuthKey, acc.SigningKey)
 		}
 	}
 	if failed {
@@ -106,7 +108,7 @@ func (a *app) needsPassphrase(key string, batch bool) string {
 	if loaded, _ := keys.InAgent(path); loaded {
 		return ""
 	}
-	return "the key has a passphrase and isn't loaded in your agent; load it with `ssh-add " + strings.TrimSuffix(key, ".pub") + "`"
+	return "the key has a passphrase and isn't loaded in your agent; load it with `" + a.loadCommand(key) + "`"
 }
 
 // isGitHub reports whether host is GitHub (github.com, GHE.com, or a GitHub
