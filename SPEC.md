@@ -231,6 +231,9 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
 - **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers.
 - **R9.2** Every action is also a subcommand, with flags for non-interactive use, so configsh or scripts can set up accounts.
+- **R9.2a Shell completion:** `doppel completion zsh|bash|fish` prints a script that completes commands, flags, account IDs (with their emails), the folders bound to accounts for `unbind`, known hosts for `--host`, folders for `--folder`, `bind` and `whoami`, and files for `--auth-key` and `--signing-key`. It covers `dop` too.
+  - The scripts are thin. They run the hidden `doppel __complete <words>`, which prints the candidates and whether the shell should complete paths itself, so `~` and quoting work as in the shell's own completion.
+  - doppel learns each command's flags from the command itself, without running it, so completion can't fall behind the flags. `__complete` never writes, never asks anything, and doesn't fail: without Git or accounts it offers less.
 - **R9.3** `dop` is an alias for `doppel` (a shell alias in configsh, like sshx's `fssh`), and doppel behaves identically under either name.
 
 ### R10. Self-update
@@ -260,6 +263,7 @@ doppel export <id> [--auth|--signing] [--no-copy]
 doppel upload <id> [--auth|--signing]    Upload keys to GitHub with gh
 doppel update [--check] [--force]        Install the latest signed release (--check only looks)
 doppel uninstall                         Remove doppel's changes to your Git and SSH files
+doppel completion zsh|bash|fish          Print a shell completion script
 doppel version                           (also -v, --version)
 doppel help                              (also -h, --help)
 

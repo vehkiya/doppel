@@ -4,6 +4,7 @@ package cli
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,10 @@ type app struct {
 	copy     func(text string) error          // puts text on the clipboard
 
 	unlock func() // releases the write lock while this command holds it
+
+	// collectFlags, when set, receives a command's flags from parseCommand,
+	// which then stops the command: shell completion reads them this way.
+	collectFlags func(*flag.FlagSet)
 
 	// githubHosts remembers which hosts are GitHub, and the host gh talks to
 	// for each, since finding out may run gh. The browser forgets it each
@@ -194,9 +199,26 @@ func (a *app) run(args []string) int {
 		return 0
 	case "update", "upgrade": // doesn't need Git, so it can run even when Git is the problem
 		return a.cmdUpdate(args)
+	case "completion":
+		return a.cmdCompletion(args)
+	case completeCommand: // a shell asking; Git problems mean fewer suggestions, not errors
+		return a.cmdComplete(args)
 	}
 
-	commands := map[string]func([]string) int{
+	handler, ok := a.commands()[cmd]
+	if !ok {
+		_, _ = fmt.Fprintf(a.stderr, "Unknown command %q. Run `doppel help` for the list of commands.\n", cmd)
+		return 2
+	}
+	if err := git.Check(); err != nil {
+		return a.fail(err)
+	}
+	return handler(args)
+}
+
+// commands maps each command that needs Git, and its aliases, to its handler.
+func (a *app) commands() map[string]func([]string) int {
+	return map[string]func([]string) int{
 		"ls":        a.cmdLs,
 		"list":      a.cmdLs,
 		"add":       a.cmdAdd,
@@ -215,15 +237,6 @@ func (a *app) run(args []string) int {
 		"test":      a.cmdTest,
 		"uninstall": a.cmdUninstall,
 	}
-	handler, ok := commands[cmd]
-	if !ok {
-		_, _ = fmt.Fprintf(a.stderr, "Unknown command %q. Run `doppel help` for the list of commands.\n", cmd)
-		return 2
-	}
-	if err := git.Check(); err != nil {
-		return a.fail(err)
-	}
-	return handler(args)
 }
 
 func (a *app) printUsage() {
@@ -253,6 +266,8 @@ func (a *app) printUsage() {
                                          looks, --force reinstalls the current one)
   doppel uninstall                       Take doppel's blocks out of your Git config and
                                          allowed_signers (accounts and keys are kept)
+  doppel completion zsh|bash|fish        Print a shell completion script, for example:
+                                         source <(doppel completion zsh)
   doppel version                         Show the version
 
 ls, rm and update also answer to list, remove or delete, and upgrade.
