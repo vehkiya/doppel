@@ -3,6 +3,7 @@
 package testenv
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -179,6 +180,30 @@ cat >&2 <<'REPLY'
 `+reply+`
 REPLY
 exit 1`)
+}
+
+// FakeAgent stands in for ssh-add with a running agent that holds the keys
+// at keyPaths: `ssh-add -l` lists their fingerprints, or says the agent has
+// no identities. Anything else ssh-add is asked to do is recorded in
+// ~/ssh-add-calls.
+func (s *Sandbox) FakeAgent(keyPaths ...string) {
+	s.T.Helper()
+	var list strings.Builder
+	for _, k := range keyPaths {
+		fp, err := keys.Fingerprint(keys.Ref(k))
+		if err != nil {
+			s.T.Fatal(err)
+		}
+		fmt.Fprintf(&list, "256 %s %s (ED25519)\n", fp, filepath.Base(k))
+	}
+	held := "echo 'The agent has no identities.'; exit 1"
+	if list.Len() > 0 {
+		held = "cat <<'KEYS'\n" + list.String() + "KEYS"
+	}
+	s.FakeCommand("ssh-add", `if [ "$1" = "-l" ]; then
+`+held+`
+fi
+echo "$@" >> "$HOME/ssh-add-calls"`)
 }
 
 // OnlyCommands replaces PATH with a folder holding just the named commands,

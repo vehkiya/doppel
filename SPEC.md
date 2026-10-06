@@ -179,6 +179,7 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - its auth key exists *(problem)*
   - its keys have a passphrase *(warning)*
   - an agent-held key is unlocked in the agent right now *(warning)*
+  - a signing key with a passphrase is in the agent, the auth key included when the account signs with it *(warning)*. `ssh-keygen` signs with the agent's copy and never reads the macOS Keychain, so otherwise every signed commit asks for the passphrase. The fix is `ssh-add <key>` (`ssh-add --apple-use-keychain <key>` on a Mac with Apple's `ssh`), or starting an agent when none is running.
   - the signing key's public key can be read *(problem)*
 - **Shared keys:** two accounts on the same host don't use the same auth key, or both rely on ssh's own keys. Either way, one would log in as the other. *(problem)*
 - **Folders:** every bound folder exists. *(warning)*
