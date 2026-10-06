@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/vehkiya/doppel/internal/accounts"
 )
@@ -36,7 +36,7 @@ func (d *formDriver) feed(cmd tea.Cmd) {
 		msg := queue[0]
 		queue = queue[1:]
 		if d.filter != nil {
-			msg = d.filter(d.form, msg)
+			msg = d.filter(nil, msg) // the wizard's filter doesn't look at the model
 		}
 		model, next := d.form.Update(msg)
 		d.form = model.(*huh.Form)
@@ -72,12 +72,20 @@ func runCmd(cmd tea.Cmd) []tea.Msg {
 	return []tea.Msg{msg}
 }
 
+// typeText types text one key at a time.
 func (d *formDriver) typeText(text string) {
-	d.feed(func() tea.Msg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)} })
+	for _, r := range text {
+		d.feed(func() tea.Msg { return tea.KeyPressMsg{Code: r, Text: string(r)} })
+	}
 }
 
-func (d *formDriver) press(k tea.KeyType) {
-	d.feed(func() tea.Msg { return tea.KeyMsg{Type: k} })
+// press presses a key, such as tea.KeyEnter, or 'u' with tea.ModCtrl.
+func (d *formDriver) press(code rune, mod ...tea.KeyMod) {
+	k := tea.KeyPressMsg{Code: code}
+	for _, m := range mod {
+		k.Mod |= m
+	}
+	d.feed(func() tea.Msg { return k })
 }
 
 func (d *formDriver) focused() string {
@@ -111,7 +119,7 @@ func TestWizardGoesBack(t *testing.T) {
 	}
 	// Shift+Tab goes back across pages, keeping what was typed.
 	for _, want := range []string{"email", "name", "id"} {
-		d.press(tea.KeyShiftTab)
+		d.press(tea.KeyTab, tea.ModShift)
 		if got := d.focused(); got != want {
 			t.Fatalf("back: focus is on %q, want %q", got, want)
 		}
@@ -142,7 +150,7 @@ func TestWizardSkipsTheGitHubPageForOtherHosts(t *testing.T) {
 			d.typeText(text)
 			d.press(tea.KeyEnter)
 		}
-		d.press(tea.KeyCtrlU) // clear the prefilled github.com
+		d.press('u', tea.ModCtrl) // clear the prefilled github.com
 		d.typeText(host)
 		d.press(tea.KeyEnter)
 		if got := d.focused(); got != next {
@@ -174,7 +182,7 @@ func (d *formDriver) advanceTo(key string) {
 func (d *formDriver) backTo(key string) {
 	d.t.Helper()
 	for i := 0; i < 20 && d.focused() != key; i++ {
-		d.press(tea.KeyShiftTab)
+		d.press(tea.KeyTab, tea.ModShift)
 	}
 	if got := d.focused(); got != key {
 		d.t.Fatalf("pressing Shift+Tab never reached %q; focus is on %q", key, got)
@@ -239,7 +247,7 @@ func TestWizardChoicesFollowEarlierAnswers(t *testing.T) {
 			t.Fatalf("the auth page doesn't name the key after the ID:\n%s", view)
 		}
 		d.backTo("id")
-		d.press(tea.KeyCtrlU)
+		d.press('u', tea.ModCtrl)
 		d.typeText("client-project-alpha-2026") // the description grows by a line
 		d.advanceTo("auth")
 		if view := d.view(); !strings.Contains(view, "id_ed25519_client-project-alpha-2026") || strings.Contains(view, "id_ed25519_work") ||
@@ -277,7 +285,7 @@ func TestWizardChoicesFollowEarlierAnswers(t *testing.T) {
 			}
 		}
 		d.backTo("email")
-		d.press(tea.KeyCtrlU)
+		d.press('u', tea.ModCtrl)
 		d.typeText("jane@acme.io")
 		d.advanceTo("save")
 		if view := d.view(); !strings.Contains(view, "jane@acme.io") || strings.Contains(view, "jane@acme.com") {
@@ -317,7 +325,7 @@ func TestWizardGoesBackFromAnUnfinishedKeyFilePage(t *testing.T) {
 				t.Fatalf("focus is on %q, want the key file page", d.focused())
 			}
 			d.typeText(typed)
-			d.press(tea.KeyShiftTab)
+			d.press(tea.KeyTab, tea.ModShift)
 			if got := d.focused(); got != "auth" {
 				t.Errorf("Shift+Tab from the key file page went to %q, want the auth key choice", got)
 			}
@@ -397,15 +405,15 @@ func TestWizardReviewShowsUnderscoresAndStars(t *testing.T) {
 	}
 }
 
-// Huh v1 scrolls a select so its chosen option is at the top whenever its
-// options are worked out again, hiding the options above it.
+// Changing the ID rewrites the auth page's description; the choices above
+// the chosen one stay in view.
 func TestWizardAuthChoicesStayVisibleAfterTheIDChanges(t *testing.T) {
 	_, ans, d := newWizard(t)
 	fillIdentity(d)
 	d.advanceTo("auth")
 	d.choose(2) // None, the last choice
 	d.backTo("id")
-	d.press(tea.KeyCtrlU)
+	d.press('u', tea.ModCtrl)
 	d.typeText("job")
 	d.advanceTo("auth")
 	if view := d.view(); ans.Auth != keyNone || !strings.Contains(view, "Generate a new key") || !strings.Contains(view, "Another key file…") {
@@ -419,7 +427,7 @@ func TestWizardIgnoresAHiddenPagesAnswer(t *testing.T) {
 	d.advanceTo("github-user")
 	d.typeText("not a user!")
 	d.backTo("hosts") // leaving a bad answer behind is allowed going back
-	d.press(tea.KeyCtrlU)
+	d.press('u', tea.ModCtrl)
 	d.typeText("gitlab.com") // which hides the GitHub page
 	d.advanceTo("save")
 	d.press(tea.KeyEnter)

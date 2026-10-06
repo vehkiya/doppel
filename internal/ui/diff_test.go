@@ -7,11 +7,12 @@ import (
 	"github.com/vehkiya/doppel/internal/plan"
 )
 
+// WriteDiff gets doppel's stdout, which Writer leaves without colors here.
 func TestWriteDiff(t *testing.T) {
 	old := []byte("a\nb\nc\nd\ne\nf\ng\nh\n")
 	updated := []byte("a\nB\nc\nd\ne\nf\ng\nh\ni\n")
 	var buf bytes.Buffer
-	WriteDiff(&buf, "~/f", plan.Change{Old: old, New: updated, Existed: true, Exists: true})
+	WriteDiff(Writer(&buf), "~/f", plan.Change{Old: old, New: updated, Existed: true, Exists: true})
 	want := `--- ~/f
 +++ ~/f
 @@ -1,4 +1,4 @@
@@ -30,7 +31,7 @@ func TestWriteDiff(t *testing.T) {
 	}
 
 	buf.Reset()
-	WriteDiff(&buf, "~/new", plan.Change{New: []byte("x\n"), Exists: true})
+	WriteDiff(Writer(&buf), "~/new", plan.Change{New: []byte("x\n"), Exists: true})
 	if got, want := buf.String(), "new file ~/new\n@@ -0,0 +1,1 @@\n+x\n"; got != want {
 		t.Errorf("writeDiff(new file) = %q, want %q", got, want)
 	}

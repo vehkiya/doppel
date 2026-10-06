@@ -9,10 +9,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/ui"
@@ -52,7 +52,7 @@ type answers struct {
 // trackDirection notes, for every message the form gets, whether the user
 // is moving back. It's the form's message filter.
 func (ans *answers) trackDirection(_ tea.Model, msg tea.Msg) tea.Msg {
-	if k, ok := msg.(tea.KeyMsg); ok {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
 		ans.goingBack = key.Matches(k, formKeyMap().Input.Prev)
 	}
 	return msg
@@ -343,9 +343,9 @@ func (ans *answers) accountID(acc *accounts.Account) string {
 }
 
 // The key choices are the same whatever the earlier answers are, and a
-// choice that doesn't fit them is refused when the user moves on. Huh v1
-// scrolls a select so its chosen option is at the top whenever its options
-// change, hiding the ones above it, so they never change.
+// choice that doesn't fit them is refused when the user moves on. When a
+// select's options change, Huh keeps the cursor where it was, so hiding the
+// chosen option would quietly answer with whichever one took its place.
 
 // authOptions lists the auth key choices: keep the current key, generate
 // one, a key found in ~/.ssh, another file, or none.

@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/keys"

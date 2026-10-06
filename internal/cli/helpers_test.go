@@ -9,6 +9,7 @@ import (
 
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/testenv"
+	"github.com/vehkiya/doppel/internal/ui"
 )
 
 const accountsDir = ".config/doppel/accounts/"
@@ -50,8 +51,8 @@ func (s *sandbox) newApp(cwd string) *app {
 		env:         s.Env(),
 		cwd:         cwd,
 		stdin:       bufio.NewReader(strings.NewReader(s.stdin)),
-		stdout:      &s.stdout,
-		stderr:      &s.stderr,
+		stdout:      ui.Writer(&s.stdout),
+		stderr:      ui.Writer(&s.stderr),
 		interactive: s.tty,
 		accessible:  true,
 		// Generated keys get an empty passphrase, as there's nobody to type one.

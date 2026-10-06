@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/paths"
 )
@@ -29,17 +30,22 @@ func newModel(t *testing.T, list []*accounts.Account, width, height int) tea.Mod
 	return m
 }
 
+// viewOf is what the browser shows, without styling.
+func viewOf(m tea.Model) string {
+	return ansi.Strip(m.View().Content)
+}
+
 func press(m tea.Model, keys ...string) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	for _, k := range keys {
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		msg := tea.KeyPressMsg{Code: []rune(k)[0], Text: k}
 		switch k {
 		case "enter":
-			msg = tea.KeyMsg{Type: tea.KeyEnter}
+			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 		case "tab":
-			msg = tea.KeyMsg{Type: tea.KeyTab}
+			msg = tea.KeyPressMsg{Code: tea.KeyTab}
 		case "esc":
-			msg = tea.KeyMsg{Type: tea.KeyEscape}
+			msg = tea.KeyPressMsg{Code: tea.KeyEscape}
 		}
 		m, cmd = m.Update(msg)
 	}
@@ -63,8 +69,8 @@ func TestKeysPickActions(t *testing.T) {
 
 func TestDeleteAsksFirst(t *testing.T) {
 	m, _ := press(newModel(t, testAccounts(), 120, 30), "d")
-	if !strings.Contains(m.View(), "Delete account work?") {
-		t.Fatalf("no confirmation shown:\n%s", m.View())
+	if !strings.Contains(viewOf(m), "Delete account work?") {
+		t.Fatalf("no confirmation shown:\n%s", viewOf(m))
 	}
 	m, _ = press(m, "n")
 	if got := m.(Model).Action(); got.Kind != Quit {
@@ -95,7 +101,7 @@ func TestQuit(t *testing.T) {
 func TestViewFitsTheTerminal(t *testing.T) {
 	for _, size := range [][2]int{{60, 15}, {80, 20}, {120, 30}} {
 		for _, list := range [][]*accounts.Account{testAccounts(), nil} {
-			view := newModel(t, list, size[0], size[1]).View()
+			view := viewOf(newModel(t, list, size[0], size[1]))
 			for _, line := range strings.Split(view, "\n") {
 				if w := lipgloss.Width(line); w > size[0] {
 					t.Errorf("%dx%d (%d accounts): a line is %d wide:\n%s", size[0], size[1], len(list), w, line)
@@ -107,7 +113,7 @@ func TestViewFitsTheTerminal(t *testing.T) {
 }
 
 func TestDetails(t *testing.T) {
-	view := newModel(t, testAccounts(), 120, 30).View()
+	view := viewOf(newModel(t, testAccounts(), 120, 30))
 	for _, want := range []string{"jane@acme.com", "github.com, gitlab.acme.com", "~/projects/work/", "~/clients/",
 		"~/.ssh/id_ed25519_work", "no passphrase", "Signing    off", "~/.config/doppel/accounts/work.gitconfig"} {
 		if !strings.Contains(view, want) {
@@ -115,7 +121,7 @@ func TestDetails(t *testing.T) {
 		}
 	}
 	m, _ := press(newModel(t, testAccounts(), 120, 30), "k") // up, to the default account
-	view = m.View()
+	view = viewOf(m)
 	for _, want := range []string{"Signing    commits and tags", "~/.ssh/id_ed25519_personal.pub", "passphrase", "in agent", "outside every folder"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("default account details are missing %q:\n%s", want, view)
@@ -128,19 +134,19 @@ func TestDetails(t *testing.T) {
 
 func TestNarrowTerminalTogglesDetails(t *testing.T) {
 	m := newModel(t, testAccounts(), 80, 20)
-	if strings.Contains(m.View(), "Auth key") {
+	if strings.Contains(viewOf(m), "Auth key") {
 		t.Error("details shown beside the list on a narrow terminal")
 	}
 	m, _ = press(m, "tab")
-	if !strings.Contains(m.View(), "Auth key") {
-		t.Errorf("tab didn't show the details:\n%s", m.View())
+	if !strings.Contains(viewOf(m), "Auth key") {
+		t.Errorf("tab didn't show the details:\n%s", viewOf(m))
 	}
 }
 
 func TestEmptyBrowser(t *testing.T) {
 	m := newModel(t, nil, 80, 20)
-	if !strings.Contains(m.View(), "No accounts yet") {
-		t.Errorf("empty view:\n%s", m.View())
+	if !strings.Contains(viewOf(m), "No accounts yet") {
+		t.Errorf("empty view:\n%s", viewOf(m))
 	}
 	m, _ = press(m, "e")
 	if got := m.(Model).Action(); got.Kind != Quit {
@@ -156,11 +162,11 @@ func TestStatusClears(t *testing.T) {
 	env := &paths.Env{Home: "/home/jane"}
 	var m tea.Model = New(Options{Env: env, Accounts: testAccounts(), Status: "✓ Added account work"})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	if !strings.Contains(m.View(), "✓ Added account work") || m.Init() == nil {
+	if !strings.Contains(viewOf(m), "✓ Added account work") || m.Init() == nil {
 		t.Fatal("status not shown, or never cleared")
 	}
 	m, _ = m.Update(clearStatusMsg{})
-	if strings.Contains(m.View(), "Added account") {
+	if strings.Contains(viewOf(m), "Added account") {
 		t.Error("status still shown after it cleared")
 	}
 }
@@ -185,8 +191,8 @@ func TestUpdateNotice(t *testing.T) {
 	if !checked {
 		t.Fatal("the update check didn't run")
 	}
-	if !strings.Contains(m.View(), "doppel v9.9.9 is available") {
-		t.Errorf("no update notice:\n%s", m.View())
+	if !strings.Contains(viewOf(m), "doppel v9.9.9 is available") {
+		t.Errorf("no update notice:\n%s", viewOf(m))
 	}
 	if m, _ := press(m, "U"); m.(Model).Action().Kind != Upgrade {
 		t.Error("U didn't pick the upgrade")
@@ -197,7 +203,7 @@ func TestUpdateNotice(t *testing.T) {
 	for _, msg := range runAll(m.Init()) {
 		m, _ = m.Update(msg)
 	}
-	if strings.Contains(m.View(), "is available") {
+	if strings.Contains(viewOf(m), "is available") {
 		t.Error("an update notice without a newer release")
 	}
 	if m, _ := press(m, "U"); m.(Model).Action().Kind != Quit {
@@ -236,7 +242,7 @@ func TestKeyDetailsLoadAfterTheBrowserShows(t *testing.T) {
 	if loaded {
 		t.Fatal("key details were loaded before the browser showed")
 	}
-	view := m.View()
+	view := viewOf(m)
 	if !strings.Contains(view, "checking…") || strings.Contains(view, "no passphrase") {
 		t.Errorf("before the details arrive:\n%s", view)
 	}
@@ -247,7 +253,7 @@ func TestKeyDetailsLoadAfterTheBrowserShows(t *testing.T) {
 	for _, msg := range msgs {
 		m, _ = m.Update(msg)
 	}
-	view = m.View()
+	view = viewOf(m)
 	if !strings.Contains(view, "no passphrase") || strings.Contains(view, "checking…") {
 		t.Errorf("after the details arrive:\n%s", view)
 	}
