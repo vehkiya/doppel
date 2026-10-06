@@ -19,7 +19,8 @@ type Identity struct {
 	InRepo bool
 	// Repo is the repo's top folder (its .git folder for a bare repo).
 	Repo string
-	// Path is the path asked about, with symlinks resolved as far as it exists.
+	// Path is the folder asked about: in a repo, the folder Git was asked
+	// from; outside one, the path with symlinks resolved as far as it exists.
 	Path   string
 	Exists bool
 

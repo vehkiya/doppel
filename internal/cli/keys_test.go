@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -343,6 +344,12 @@ func TestWhoamiLogin(t *testing.T) {
 	}
 	if out := s.mustRun("whoami", repo); !strings.Contains(out, "Auth key  ~/.ssh/id_work (no passphrase)") {
 		t.Errorf("auth key status missing:\n%s", out)
+	}
+	// A file in the repo is answered for the repo it's in, login included.
+	_, _ = git.Run(repo, "remote", "set-url", "origin", "git@github.com:acme/api.git")
+	s.Write("repo/README.md", "hi\n")
+	if out := s.mustRun("whoami", filepath.Join(repo, "README.md")); !strings.Contains(out, "Login     ✓ github.com") {
+		t.Errorf("whoami on a file doesn't log in:\n%s", out)
 	}
 
 	_ = os.Remove(s.Path("ssh-calls"))

@@ -80,7 +80,7 @@ func (a *app) cmdWhoami(args []string) int {
 	}
 
 	if id.Account != nil && !offline {
-		if login, ok := ops.RemoteLogin(ctx, id.Account, path); ok {
+		if login, ok := ops.RemoteLogin(ctx, id.Account, id.Path); ok {
 			switch {
 			case login.Skipped:
 				a.row("Login", ui.Dim.Render(login.Detail))
