@@ -1,15 +1,13 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"strings"
 
 	"charm.land/huh/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/tui"
 	"github.com/vehkiya/doppel/internal/ui"
 	"github.com/vehkiya/doppel/internal/update"
@@ -63,6 +61,7 @@ func (a *app) updateCheck() func() (string, bool) {
 // doppel updated itself.
 func (a *app) runAction(act tui.Action) (status string, quit bool) {
 	defer a.unlockWrites() // a command that failed early may still hold the lock
+	a.warnings = 0
 	switch act.Kind {
 	case tui.Upgrade:
 		installed, err := update.Perform(version.Version, a.stdout, false)
@@ -90,52 +89,37 @@ func (a *app) runAction(act tui.Action) (status string, quit bool) {
 	case tui.Bind:
 		folder, err := a.askFolder(act.ID)
 		if err != nil {
-			return statusOf(err.Error(), ""), false
+			return a.status(nil, err), false
 		}
-		return a.captured(func() int { return a.cmdBind([]string{act.ID, folder}) }), false
+		return a.status(a.bind(act.ID, []string{folder}, writeFlags{})), false
 	case tui.Add:
-		return a.captured(func() int { return a.addWithWizard("", writeFlags{}) }), false
+		return a.status(a.addWithWizard("", writeFlags{})), false
 	case tui.Edit:
-		return a.captured(func() int { return a.cmdEdit([]string{act.ID}) }), false
+		return a.status(a.editWithWizard(act.ID, writeFlags{})), false
 	case tui.Delete:
-		return a.captured(func() int { return a.cmdRm([]string{act.ID, "--yes"}) }), false
+		// The browser asked before deleting.
+		return a.status(a.remove(act.ID, writeFlags{yes: true})), false
 	case tui.SetDefault:
-		return a.captured(func() int { return a.cmdDefault([]string{act.ID}) }), false
+		return a.status(a.setDefault(act.ID, writeFlags{})), false
 	}
 	return "", false
 }
 
-// captured runs a command, showing its output as usual, and sums it up as a
-// status for the browser. Warnings and errors (other than a cancellation)
-// wait for Enter, so they can be read before the browser covers them.
-func (a *app) captured(run func() int) string {
-	var out, errOut bytes.Buffer
-	stdout, stderr := a.stdout, a.stderr
-	a.stdout, a.stderr = io.MultiWriter(stdout, &out), io.MultiWriter(stderr, &errOut)
-	run()
-	a.stdout, a.stderr = stdout, stderr
-
-	problems := ansi.Strip(errOut.String())
-	if strings.TrimSpace(problems) != "" && !strings.Contains(problems, errCancelled.Error()) {
+// status sums up a change for the browser's status line: its result, or
+// the error that stopped it. An error or a warning (other than the user
+// cancelling) waits for Enter, so it can be read before the browser covers it.
+func (a *app) status(res *ops.Result, err error) string {
+	switch {
+	case err != nil:
+		a.fail(err)
+		if !cancelled(err) {
+			a.pause()
+		}
+		return "✗ " + err.Error()
+	case a.warnings > 0:
 		a.pause()
 	}
-	return statusOf(ansi.Strip(out.String()), problems)
-}
-
-// statusOf picks the line worth showing from a command's output: an error,
-// else its result.
-func statusOf(out, problems string) string {
-	for _, line := range strings.Split(problems, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "✗") {
-			return strings.TrimSpace(line)
-		}
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "✓") {
-			return strings.TrimSpace(line)
-		}
-	}
-	return ""
+	return "✓ " + res.Message
 }
 
 // askFolder asks for a folder to bind to an account.

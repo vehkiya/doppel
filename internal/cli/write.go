@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/vehkiya/doppel/internal/accounts"
-	"github.com/vehkiya/doppel/internal/plan"
+	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/store"
 	"github.com/vehkiya/doppel/internal/ui"
 )
@@ -33,8 +34,8 @@ func (a *app) unlockWrites() {
 // loadForWrite loads the accounts a command is about to change and save.
 // A command that can't stop to ask anything takes the write lock first, so
 // commands running at once go one after the other. One that may ask (it has a
-// terminal) leaves the lock to save, so a prompt never keeps other commands
-// waiting; save then fails if the files changed in the meantime.
+// terminal) leaves the lock to the save, so a prompt never keeps other
+// commands waiting; the save then fails if the files changed in the meantime.
 func (a *app) loadForWrite(w writeFlags) ([]*accounts.Account, error) {
 	if !a.interactive && !w.dryRun {
 		if err := a.lockWrites(); err != nil {
@@ -44,68 +45,75 @@ func (a *app) loadForWrite(w writeFlags) ([]*accounts.Account, error) {
 	return accounts.Load(a.env)
 }
 
-// save writes list as the complete set of accounts, first generating any
-// pending keys. With --dry-run it shows what would change instead.
-func (a *app) save(list []*accounts.Account, w writeFlags, done string, pending ...pendingKey) int {
-	return a.saveRemoving(nil, list, w, done, pending...)
+// opsContext is what operations need from this command: where it runs, and
+// how to confirm (--yes answers up front).
+func (a *app) opsContext(w writeFlags) ops.Context {
+	return ops.Context{
+		Env: a.env, Cwd: a.cwd,
+		Confirm: func(question string) error { return a.confirm(question, w.assumeYes()) },
+	}
 }
 
-// saveRemoving is save for a command that deletes accounts: removed are
-// those accounts, which are no longer in list. No other account is deleted.
-func (a *app) saveRemoving(removed, list []*accounts.Account, w writeFlags, done string, pending ...pendingKey) int {
-	if err := accounts.ValidateAll(a.env, list); err != nil {
-		return a.fail(err)
+// change is how every command, wizard and browser action changes accounts:
+// it loads them, works out the change with op, and saves it, showing what
+// happened. With --dry-run it shows what would change instead.
+func (a *app) change(w writeFlags, op func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error)) (*ops.Result, error) {
+	list, err := a.loadForWrite(w)
+	if err != nil {
+		return nil, err
 	}
-	opts := store.Options{Removed: removed}
-	if w.dryRun {
-		for _, k := range pending {
-			a.notef("Dry run: would generate the %s %s", k.purpose, a.env.Shorten(k.path))
-		}
-		opts.PublicKey = a.dryRunKeys(pending)
-	} else {
-		if err := a.generateKeys(pending); err != nil {
-			return a.fail(err)
-		}
-		if err := a.lockWrites(); err != nil {
-			return a.fail(err)
-		}
+	ctx := a.opsContext(w)
+	ch, err := op(ctx, list)
+	if err != nil {
+		return nil, err
 	}
-	p := plan.New(a.env.StagingDir())
-	defer p.Close()
-	if err := store.Save(a.env, p, list, opts); err != nil {
-		return a.fail(err)
+	for _, warning := range ch.Warnings {
+		a.warnf("%s", warning)
 	}
-	code := a.finish(p, w, done)
-	if code == 0 && !w.dryRun {
-		a.rememberPassphrases(pending, w.assumeYes())
+	opts := ops.SaveOptions{DryRun: w.dryRun, Lock: a.lockWrites}
+	if a.interactive {
+		opts.Generate = a.generateKey
 	}
-	return code
+	res, err := ops.Save(ctx, ch, opts)
+	if err != nil {
+		return nil, err
+	}
+	a.showResult(res)
+	if !res.DryRun {
+		a.rememberPassphrases(res.NewKeys, w.assumeYes())
+	}
+	return res, nil
 }
 
-// finish applies a plan, or prints it for --dry-run.
-func (a *app) finish(p *plan.Plan, w writeFlags, done string) int {
-	if w.dryRun {
-		changes, err := p.Changes()
-		if err != nil {
-			return a.fail(err)
-		}
-		if len(changes) == 0 {
-			a.notef("Dry run: nothing would change.")
-			return 0
-		}
-		a.notef("Dry run: nothing was written. These changes would be made:")
-		for _, c := range changes {
-			a.printf("\n")
-			ui.WriteDiff(a.stdout, a.env.Shorten(c.Path), c)
-		}
-		return 0
-	}
-	changes, err := p.Apply()
+// exitStatus ends a command that changed accounts: 0 once it's done, or the
+// error's status.
+func (a *app) exitStatus(_ *ops.Result, err error) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	a.successf("%s", done)
-	for _, c := range changes {
+	return 0
+}
+
+// showResult says what a save did: the files it wrote, then its notes. For
+// a dry run it shows the keys it would generate and the diff of every file.
+func (a *app) showResult(res *ops.Result) {
+	if res.DryRun {
+		for _, k := range res.NewKeys {
+			a.notef("Dry run: would generate the %s %s", k.Purpose, a.env.Shorten(k.Path))
+		}
+		if len(res.Changes) == 0 {
+			a.notef("Dry run: nothing would change.")
+			return
+		}
+		a.notef("Dry run: nothing was written. These changes would be made:")
+		for _, c := range res.Changes {
+			a.printf("\n")
+			ui.WriteDiff(a.stdout, a.env.Shorten(c.Path), c)
+		}
+		return
+	}
+	a.successf("%s", res.Message)
+	for _, c := range res.Changes {
 		verb := "updated"
 		switch {
 		case !c.Existed:
@@ -115,32 +123,24 @@ func (a *app) finish(p *plan.Plan, w writeFlags, done string) int {
 		}
 		a.notef("  %s %s", verb, a.env.Shorten(c.Path))
 	}
-	return 0
+	for _, note := range res.Notes {
+		a.notef("%s", note)
+	}
 }
 
-// bindFolders adds folders to acc. A folder bound to another account moves
-// to acc after confirmation.
-func (a *app) bindFolders(list []*accounts.Account, acc *accounts.Account, inputs []string, w writeFlags) error {
-	for _, input := range inputs {
-		folder, exists, err := a.env.NormalizeFolder(input, a.cwd)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			a.warnf("%s doesn't exist yet; the rule applies to repos created there later", folder)
-		}
-		owner := accounts.FolderOwner(a.env, list, folder)
-		if owner == acc {
-			continue
-		}
-		if owner != nil {
-			question := fmt.Sprintf("%s is bound to %s. Move it to %s?", folder, owner.ID, acc.ID)
-			if err := a.confirm(question, w.assumeYes()); err != nil {
-				return err
-			}
-			owner.RemoveFolder(a.env, folder)
-		}
-		acc.Folders = append(acc.Folders, folder)
+// generateKey creates a key, letting ssh-keygen ask for its passphrase on
+// the terminal.
+func (a *app) generateKey(k ops.NewKey) error {
+	a.printf("Generating the %s %s. Choose a passphrase to protect it.\n", k.Purpose, a.env.Shorten(k.Path))
+	if err := a.generate(k.Path, k.Comment); err != nil {
+		return err
+	}
+	if keys.CheckProtection(keys.Ref(k.Path)) == keys.Unencrypted {
+		a.warnf("%s has no passphrase: anyone who copies it can use it. Add one with: ssh-keygen -p -f %s",
+			a.env.Shorten(k.Path), a.env.Shorten(k.Path))
 	}
 	return nil
 }
+
+// cancelled reports whether err is the user declining or cancelling.
+func cancelled(err error) bool { return errors.Is(err, errCancelled) }

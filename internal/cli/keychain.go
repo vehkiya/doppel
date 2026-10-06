@@ -5,6 +5,7 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 )
 
 // macKeychain reports whether passphrases can be kept in the macOS
@@ -31,11 +32,11 @@ func (a *app) loadCommand(key keys.Ref) string {
 // rememberPassphrases helps Git use newly generated keys without asking for
 // their passphrases. On a Mac it offers to keep each one in the Keychain;
 // elsewhere it says how to load them into the agent.
-func (a *app) rememberPassphrases(pending []pendingKey, assumeYes bool) {
+func (a *app) rememberPassphrases(newKeys []ops.NewKey, assumeYes bool) {
 	var locked []string
-	for _, k := range pending {
-		if keys.CheckProtection(keys.Ref(k.path)) == keys.Encrypted {
-			locked = append(locked, a.env.Shorten(k.path))
+	for _, k := range newKeys {
+		if keys.CheckProtection(keys.Ref(k.Path)) == keys.Encrypted {
+			locked = append(locked, a.env.Shorten(k.Path))
 		}
 	}
 	if len(locked) == 0 {

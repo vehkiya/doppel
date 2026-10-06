@@ -40,6 +40,10 @@ type app struct {
 
 	unlock func() // releases the write lock while this command holds it
 
+	// warnings counts the warnings printed, so the browser can wait for
+	// Enter after an action that printed some.
+	warnings int
+
 	// collectFlags, when set, receives a command's flags from parseCommand,
 	// which then stops the command: shell completion reads them this way.
 	collectFlags func(*flag.FlagSet)
@@ -65,6 +69,7 @@ func (a *app) notef(format string, args ...any) {
 }
 
 func (a *app) warnf(format string, args ...any) {
+	a.warnings++
 	_, _ = fmt.Fprintln(a.stderr, ui.Warn.Render("⚠")+" "+fmt.Sprintf(format, args...))
 }
 

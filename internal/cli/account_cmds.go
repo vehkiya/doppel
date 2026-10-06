@@ -1,12 +1,13 @@
 package cli
 
 import (
-	"fmt"
+	"flag"
 	"strings"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
@@ -90,47 +91,22 @@ func (a *app) cmdAdd(args []string) int {
 		if len(positional) == 1 {
 			id = positional[0]
 		}
-		return a.addWithWizard(id, w)
+		return a.exitStatus(a.addWithWizard(id, w))
 	}
 	if len(positional) != 1 {
 		return a.usageError(addUsage)
 	}
-	id := positional[0]
-	if err := accounts.ValidateID(id); err != nil {
-		return a.fail(err)
-	}
-	list, err := a.loadForWrite(w)
+	keyChanges, err := keyChangesFromFlags(fs, k)
 	if err != nil {
 		return a.fail(err)
 	}
-	if accounts.Find(list, id) != nil {
-		return a.fail(fmt.Errorf("account %s already exists; change it with `doppel edit %s`", id, id))
+	req := ops.AddRequest{
+		Account: &accounts.Account{ID: positional[0], Name: f.name, Email: f.email, GitHubUser: f.githubUser, Hosts: f.hosts},
+		Folders: f.folders, Default: f.makeDefault, Keys: keyChanges,
 	}
-
-	acc := &accounts.Account{ID: id, Name: f.name, Email: f.email, GitHubUser: f.githubUser, Hosts: f.hosts}
-	if len(acc.Hosts) == 0 {
-		acc.Hosts = []string{accounts.DefaultHost}
-	}
-	if err := acc.Validate(); err != nil {
-		return a.fail(err)
-	}
-	ch, err := keyChangesFromFlags(fs, k)
-	if err != nil {
-		return a.fail(err)
-	}
-	pending, err := a.applyKeyChanges(acc, ch)
-	if err != nil {
-		return a.fail(err)
-	}
-	if err := a.bindFolders(list, acc, f.folders, w); err != nil {
-		return a.fail(err)
-	}
-	list = append(list, acc)
-	if len(list) == 1 || f.makeDefault {
-		accounts.SetDefault(list, acc)
-	}
-	a.warnSharedKeys(list)
-	return a.save(list, w, fmt.Sprintf("Added account %s", id), pending...)
+	return a.exitStatus(a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.Add(ctx, list, req)
+	}))
 }
 
 const editUsage = `doppel edit <id> [--name <name>] [--email <email>] [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default[=false]] [--dry-run] [--yes]
@@ -154,60 +130,48 @@ func (a *app) cmdEdit(args []string) int {
 	if len(positional) != 1 {
 		return a.usageError(editUsage)
 	}
-	list, err := a.loadForWrite(w)
+	id := positional[0]
+	if a.interactive && onlyWriteFlags(fs) {
+		return a.exitStatus(a.editWithWizard(id, w))
+	}
+	req, err := editRequestFromFlags(fs, id, f, k)
 	if err != nil {
 		return a.fail(err)
 	}
-	acc := accounts.Find(list, positional[0])
-	if acc == nil {
-		return a.fail(fmt.Errorf("no account named %s", positional[0]))
-	}
-
-	changed := false
-	if flagWasSet(fs, "name") {
-		acc.Name, changed = f.name, true
-	}
-	if flagWasSet(fs, "email") {
-		acc.Email, changed = f.email, true
-	}
-	if flagWasSet(fs, "github-user") {
-		acc.GitHubUser, changed = f.githubUser, true
-	}
-	if flagWasSet(fs, "host") {
-		acc.Hosts, changed = f.hosts, true
-	}
-	if flagWasSet(fs, "folder") {
-		acc.Folders = nil
-		if err := a.bindFolders(list, acc, f.folders, w); err != nil {
-			return a.fail(err)
-		}
-		changed = true
-	}
-	if flagWasSet(fs, "default") {
-		if f.makeDefault {
-			accounts.SetDefault(list, acc)
-		} else {
-			acc.Default = false
-		}
-		changed = true
-	}
-	ch, err := keyChangesFromFlags(fs, k)
-	if err != nil {
-		return a.fail(err)
-	}
-	pending, err := a.applyKeyChanges(acc, ch)
-	if err != nil {
-		return a.fail(err)
-	}
-	changed = changed || ch.any()
-	if !changed && a.interactive && onlyWriteFlags(fs) {
-		return a.editWithWizard(list, acc, w)
-	}
-	if !changed {
+	if req.Empty() {
 		return a.usageError(editUsage)
 	}
-	a.warnSharedKeys(list)
-	return a.save(list, w, fmt.Sprintf("Updated account %s", acc.ID), pending...)
+	return a.exitStatus(a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.Edit(ctx, list, req)
+	}))
+}
+
+// editRequestFromFlags reads the changes edit's flags ask for. A flag that
+// isn't given keeps its setting.
+func editRequestFromFlags(fs *flag.FlagSet, id string, f accountFlags, k keyFlags) (ops.EditRequest, error) {
+	req := ops.EditRequest{ID: id}
+	if flagWasSet(fs, "name") {
+		req.Name = &f.name
+	}
+	if flagWasSet(fs, "email") {
+		req.Email = &f.email
+	}
+	if flagWasSet(fs, "github-user") {
+		req.GitHubUser = &f.githubUser
+	}
+	if flagWasSet(fs, "host") {
+		req.Hosts = f.hosts
+	}
+	if flagWasSet(fs, "folder") {
+		folders := []string(f.folders)
+		req.Folders = &folders
+	}
+	if flagWasSet(fs, "default") {
+		req.Default = &f.makeDefault
+	}
+	var err error
+	req.Keys, err = keyChangesFromFlags(fs, k)
+	return req, err
 }
 
 const rmUsage = "doppel rm <id> [--dry-run] [--yes]"
@@ -223,40 +187,24 @@ func (a *app) cmdRm(args []string) int {
 	if len(positional) != 1 {
 		return a.usageError(rmUsage)
 	}
-	list, err := a.loadForWrite(w)
-	if err != nil {
-		return a.fail(err)
-	}
-	acc := accounts.Find(list, positional[0])
-	if acc == nil {
-		return a.fail(fmt.Errorf("no account named %s", positional[0]))
-	}
-	question := fmt.Sprintf("Delete account %s and its folder rules? Key files are kept.", acc.ID)
-	if err := a.confirm(question, w.assumeYes()); err != nil {
-		return a.fail(err)
-	}
+	return a.exitStatus(a.remove(positional[0], w))
+}
 
-	var rest []*accounts.Account
-	for _, other := range list {
-		if other != acc {
-			rest = append(rest, other)
-		}
+// remove deletes an account. In a terminal it asks which account becomes
+// the default when the default one goes.
+func (a *app) remove(id string, w writeFlags) (*ops.Result, error) {
+	req := ops.RemoveRequest{ID: id}
+	if a.interactive {
+		req.NewDefault = a.chooseNewDefault
 	}
-	if acc.Default && len(rest) > 0 && a.interactive {
-		if err := a.chooseNewDefault(rest); err != nil {
-			return a.fail(err)
-		}
-	}
-	code = a.saveRemoving([]*accounts.Account{acc}, rest, w, fmt.Sprintf("Deleted account %s", acc.ID))
-	if code == 0 && acc.Default && accounts.Default(rest) == nil && len(rest) > 0 && !w.dryRun {
-		a.notef("There's no default account now. Choose one with: doppel default <id>")
-	}
-	return code
+	return a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.Remove(ctx, list, req)
+	})
 }
 
 // chooseNewDefault asks which account takes over as the default when the
 // default one is deleted.
-func (a *app) chooseNewDefault(rest []*accounts.Account) error {
+func (a *app) chooseNewDefault(rest []*accounts.Account) (*accounts.Account, error) {
 	options := []huh.Option[string]{}
 	for _, other := range rest {
 		options = append(options, huh.NewOption(other.ID+" ("+other.Email+")", other.ID))
@@ -268,10 +216,9 @@ func (a *app) chooseNewDefault(rest []*accounts.Account) error {
 			Description("The default account is used for repos outside every folder").
 			Options(options...).Value(&choice),
 	))); err != nil {
-		return err
+		return nil, err
 	}
-	accounts.SetDefault(rest, accounts.Find(rest, choice))
-	return nil
+	return accounts.Find(rest, choice), nil
 }
 
 const renameUsage = "doppel rename <id> <new-id> [--dry-run]"
@@ -288,22 +235,9 @@ func (a *app) cmdRename(args []string) int {
 		return a.usageError(renameUsage)
 	}
 	oldID, newID := positional[0], positional[1]
-	if err := accounts.ValidateID(newID); err != nil {
-		return a.fail(err)
-	}
-	list, err := a.loadForWrite(w)
-	if err != nil {
-		return a.fail(err)
-	}
-	acc := accounts.Find(list, oldID)
-	if acc == nil {
-		return a.fail(fmt.Errorf("no account named %s", oldID))
-	}
-	if accounts.Find(list, newID) != nil {
-		return a.fail(fmt.Errorf("account %s already exists", newID))
-	}
-	acc.ID = newID
-	return a.save(list, w, fmt.Sprintf("Renamed account %s to %s", oldID, newID))
+	return a.exitStatus(a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.Rename(ctx, list, oldID, newID)
+	}))
 }
 
 const defaultUsage = "doppel default [<id> | --none] [--dry-run]"
@@ -321,12 +255,11 @@ func (a *app) cmdDefault(args []string) int {
 	if len(positional) > 1 || (none && len(positional) > 0) {
 		return a.usageError(defaultUsage)
 	}
-	list, err := a.loadForWrite(w)
-	if err != nil {
-		return a.fail(err)
-	}
-
 	if len(positional) == 0 && !none {
+		list, err := accounts.Load(a.env)
+		if err != nil {
+			return a.fail(err)
+		}
 		if def := accounts.Default(list); def != nil {
 			a.printf("%s\n", def.ID)
 		} else {
@@ -334,14 +267,16 @@ func (a *app) cmdDefault(args []string) int {
 		}
 		return 0
 	}
-	if none {
-		accounts.SetDefault(list, nil)
-		return a.save(list, w, "Cleared the default account")
+	id := ""
+	if !none {
+		id = positional[0]
 	}
-	acc := accounts.Find(list, positional[0])
-	if acc == nil {
-		return a.fail(fmt.Errorf("no account named %s", positional[0]))
-	}
-	accounts.SetDefault(list, acc)
-	return a.save(list, w, fmt.Sprintf("%s is now the default account", acc.ID))
+	return a.exitStatus(a.setDefault(id, w))
+}
+
+// setDefault makes the account named id the default, or with "" leaves none.
+func (a *app) setDefault(id string, w writeFlags) (*ops.Result, error) {
+	return a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.SetDefault(ctx, list, id)
+	})
 }

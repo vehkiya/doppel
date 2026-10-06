@@ -3,8 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/vehkiya/doppel/internal/plan"
-	"github.com/vehkiya/doppel/internal/store"
+	"github.com/vehkiya/doppel/internal/ops"
 )
 
 const uninstallUsage = "doppel uninstall [--dry-run] [--yes]"
@@ -25,33 +24,14 @@ func (a *app) cmdUninstall(args []string) int {
 	if err := a.confirm(question, w.assumeYes()); err != nil {
 		return a.fail(err)
 	}
-	if !w.dryRun {
-		if err := a.lockWrites(); err != nil {
-			return a.fail(err)
-		}
-	}
-	p := plan.New(a.env.StagingDir())
-	defer p.Close()
-	removedInclude, err := store.RemoveInclude(a.env, p)
+	res, err := ops.Uninstall(a.opsContext(w), ops.SaveOptions{DryRun: w.dryRun, Lock: a.lockWrites})
 	if err != nil {
 		return a.fail(err)
 	}
-	removedSigners, err := store.RemoveSigners(a.env, p)
-	if err != nil {
-		return a.fail(err)
-	}
-	if !removedInclude && !removedSigners {
+	if len(res.Changes) == 0 && res.Message == "" {
 		a.notef("%s doesn't include doppel's accounts; nothing to remove.", global)
 		return 0
 	}
-	done := "Removed doppel's include from " + global
-	if removedSigners {
-		done += " and its keys from allowed_signers"
-	}
-	code = a.finish(p, w, done)
-	if code == 0 && !w.dryRun {
-		a.notef("Account files are still in %s. Any doppel command that changes accounts adds the include back.",
-			a.env.Shorten(a.env.AccountsDir()))
-	}
-	return code
+	a.showResult(res)
+	return 0
 }

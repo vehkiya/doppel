@@ -9,6 +9,7 @@ import (
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/github"
 	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 )
 
 const uploadUsage = "doppel upload <id> [--auth | --signing]"
@@ -72,7 +73,7 @@ func (a *app) cmdUpload(args []string) int {
 		}
 	}
 	if spelling != "" {
-		a.offerGitHubUser(list, acc, spelling)
+		a.offerGitHubUser(acc, spelling)
 	}
 	return 0
 }
@@ -80,7 +81,7 @@ func (a *app) cmdUpload(args []string) int {
 // offerGitHubUser offers to store the GitHub user the way GitHub and gh
 // spell it, when the account has it differently in capitals. gh matches the
 // name exactly, so the other spelling only works because doppel looked it up.
-func (a *app) offerGitHubUser(list []*accounts.Account, acc *accounts.Account, login string) {
+func (a *app) offerGitHubUser(acc *accounts.Account, login string) {
 	if !a.interactive {
 		a.notef("GitHub spells the user %s, not %s. Correct it with: doppel edit %s --github-user %s", login, acc.GitHubUser, acc.ID, login)
 		return
@@ -89,8 +90,12 @@ func (a *app) offerGitHubUser(list []*accounts.Account, acc *accounts.Account, l
 	if err := a.confirm(question, false); err != nil {
 		return // declined, or the question was cancelled; the upload itself worked
 	}
-	acc.GitHubUser = login
-	a.save(list, writeFlags{}, fmt.Sprintf("Updated account %s", acc.ID))
+	_, err := a.change(writeFlags{}, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.Edit(ctx, list, ops.EditRequest{ID: acc.ID, GitHubUser: &login})
+	})
+	if err != nil {
+		a.fail(err)
+	}
 }
 
 // uploadTo adds keys to the account's user on one GitHub host. fallBack is

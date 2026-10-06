@@ -444,8 +444,7 @@ func TestWizardIgnoresAHiddenPagesAnswer(t *testing.T) {
 	if d.form.State != huh.StateCompleted {
 		t.Fatalf("form state %v; saving was refused:\n%s", d.form.State, d.view())
 	}
-	acc := &accounts.Account{}
-	s.newApp(s.Home).applyAnswers(ans, acc)
+	acc := s.newApp(s.Home).addRequest(ans, &accounts.Account{}).Account
 	if acc.GitHubUser != "" {
 		t.Errorf("GitHub user = %q from a page that was hidden", acc.GitHubUser)
 	}
