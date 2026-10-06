@@ -47,13 +47,13 @@ func SignersFile(env *paths.Env) (path string, configured bool, err error) {
 
 // signerEntries lists one allowed_signers line per signing account, sorted
 // as the accounts are.
-func signerEntries(env *paths.Env, list []*accounts.Account, publicKey func(string) (string, error)) ([]string, error) {
+func signerEntries(env *paths.Env, list []*accounts.Account, publicKey func(keys.Ref) (string, error)) ([]string, error) {
 	var entries []string
 	for _, a := range list {
 		if a.SigningKey == "" {
 			continue
 		}
-		pub, err := publicKey(env.Expand(a.SigningKey))
+		pub, err := publicKey(a.SigningKey.Map(env.Expand))
 		if err != nil {
 			return nil, fmt.Errorf("account %s: signing key %s: %w (change it with `doppel edit %s --signing-key <key>` or `--no-signing`)",
 				a.ID, a.SigningKey, err, a.ID)
@@ -66,7 +66,7 @@ func signerEntries(env *paths.Env, list []*accounts.Account, publicKey func(stri
 // stageSigners writes doppel's block in the allowed_signers file. It returns
 // the file to set in the index, or "" when the user configured their own or
 // no account signs.
-func stageSigners(env *paths.Env, p *plan.Plan, list []*accounts.Account, publicKey func(string) (string, error)) (string, error) {
+func stageSigners(env *paths.Env, p *plan.Plan, list []*accounts.Account, publicKey func(keys.Ref) (string, error)) (string, error) {
 	entries, err := signerEntries(env, list, publicKey)
 	if err != nil {
 		return "", err

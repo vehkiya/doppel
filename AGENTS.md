@@ -19,14 +19,20 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves apart from two shared helpers: `atomicfile` (`plan`, `update`) and `proc` (`git`, `keys`, `github`, `cli`). `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way, and `TestDependenciesPointOneWay` (`architecture_test.go`) checks them in CI. When you add a package or an import across packages, update its `layers` map in the same change.
+  * `cli` → `ops`, `doctor` → `store` → `accounts` → `paths`, `git`, `keys`.
+  * `ops` and `doctor` also use `hosts`, which wraps `github`. `cli` also uses `update`, and runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`.
+  * `plan`, `keys`, `github` and `update` are leaves apart from two shared helpers: `atomicfile` (`plan`, `update`) and `proc` (`git`, `keys`, `github`, `cli`). `ui` only uses `plan.Change`. Nothing imports `cli`.
+* **`cli` only adapts and renders.** It turns flags, wizard answers and browser actions into `ops` requests, asks the questions an operation needs (through `ops.Context.Confirm` and callbacks such as `RemoveRequest.NewDefault`), and prints the results.
+  * The work happens in `ops` and `doctor`, which return structured results (`ops.Change` and `ops.Result`, `ops.Identity`, `ops.Check`, `doctor.Finding`) and never print.
+  * Don't put a decision in `cli` that another front-end would have to repeat.
 * Export only what another package needs. The end-to-end tests in `cli` count as another package: they use `store`'s include helpers to check the global config. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
 * doppel is a single static binary: the Go standard library plus the Charm libraries (`bubbletea`, `bubbles`, `huh` and `lipgloss`, all v2 from `charm.land`, and the `charmbracelet/x` and `colorprofile` helpers they're built on). No CGO.
 * At runtime it calls `git`, `ssh`, `ssh-keygen`, `ssh-add` and, optionally, `gh` (2.40 or newer). Nothing else.
 * **Run tools through `proc.Command`** with a time limit (`proc.Local` or `proc.Network`), so a hung agent or a silent server can't freeze doppel. Only a command that may ask the user something, such as `ssh-keygen` asking for a passphrase, runs without one.
-* **Don't fetch a token to answer a question:** whether a host is GitHub comes from `gh auth status`, which never prints one, and `cli` remembers the answer for the rest of the command (`app.apiHost`).
+* **Don't fetch a token to answer a question:** whether a host is GitHub comes from `gh auth status`, which never prints one, and `hosts.GitHub` remembers the answer for the rest of the command (`app.github`, which the browser makes forget each time it opens).
 
 ### 2.2 Git config integrity
 * **Git is the authority on its config format.** Read and write Git config through `git config --file` (`git.ReadConfigFile`, `git.ConfigFile`, and `reconcile` in `store`). The only text doppel writes itself is the generated index and the include block, which it fully controls.
@@ -36,6 +42,8 @@ Before committing, all of the following must pass cleanly:
   * Use `git.Run` only where the user's config is the point, such as `whoami` and `rev-parse`.
 * **Validate every folder before it's written into a rule** (`paths.ValidateFolder`), including folders read back from hand-edited account files.
 * **Every account file sets every managed key** (`Account.Settings`), including "reset" values such as `commit.gpgsign = false` and `core.sshCommand = ssh`. Git applies the default account first and the folder account on top, so a key one account leaves out leaks in from another.
+  * The managed keys are listed once, in `accounts.Managed`: each key's value, whether it's read back from the file, and whether it's an identity setting (`IdentityKeys`, which `whoami`, `doctor` and the first-run import use). Add a managed key there and nowhere else.
+* **Key references are `keys.Ref`s.** An account names a key by its private path, by a `.pub` whose private half an agent holds, or (for signing) inline as `key::<public key>`. Ask the `Ref` (`PublicPath`, `PrivatePath`, `Public`, `IsLiteral`, `SameKey`) rather than looking at `.pub` or `key::` yourself, and expand `~/` with `ref.Map(env.Expand)`.
 * **Only managed keys are touched.** Settings a user adds to an account file, such as `pull.rebase`, must survive every command, including rename.
 * **The include stays last.**
   * doppel appends its include block to the end of the global file Git reads last, as text: `git config --add` would put it inside an existing `[include]` section.
@@ -50,8 +58,9 @@ Before committing, all of the following must pass cleanly:
 * `Apply` keeps hidden backups of the last three versions of each file it replaces or removes (`.<name>.doppel.bak`, `.bak.1`, `.bak.2`), and writes atomically, preserving the file's mode and any symlink, even a dangling one.
 * A plan stages its working copies in `~/.config/doppel/.staging` (`Env.StagingDir`), never the shared temp directory: they can hold secrets from the global config. Don't write other temporary copies of user config; pass text to Git on stdin instead (`git.ReadConfig`).
 * `Apply` takes every backup first, writes next, and removes files last, so a failure partway never leaves a folder rule pointing at a missing file. If a step fails it rolls back what it already did, so a failed command leaves every file as it was. `Apply` also fails with `plan.StaleError` when a file no longer has the content it was staged from.
+* **Change accounts through `ops`.** Each operation (`ops.Add`, `Edit`, `Remove`, `Rename`, `Bind`, `Unbind`, `SetDefault`) takes a typed request and returns an `ops.Change`, and `ops.Save` writes it. In `cli`, `app.change` loads, runs the operation and saves, so flags, wizards and the browser share one implementation.
 * **Stage accounts only through `store.Save`**, which validates them (`accounts.ValidateAll`) and fails when an account file changed since the command loaded it. There is no other exported way, so `doctor --fix` can't write what a command would refuse. Say which accounts you delete (`store.Options.Removed`, or a rename); nothing else is ever deleted.
-* **Take the write lock** (`app.lockWrites`, from `store.Lock`) around the load, save and apply of anything that writes. A command that may prompt takes it only in `save`, never while a prompt is open.
+* **Take the write lock** (`app.lockWrites`, from `store.Lock`) around the load, save and apply of anything that writes. A command that may prompt takes it only when `ops.Save` runs (`SaveOptions.Lock`), never while a prompt is open.
 * Because commands only stage changes, `--dry-run` shows exactly what a real run would write. Never write a file outside a plan.
 * doppel never overwrites or deletes key files.
 
@@ -73,7 +82,7 @@ Before committing, all of the following must pass cleanly:
 * Validate a prefilled field with `keepIfEmpty`. In accessible mode an empty answer means "keep the value", and Huh validates the typed text before falling back to it.
 * Commands only ask when they have no flags and a terminal (`onlyWriteFlags`). Scripts must never get a question.
 * **Every command parses its flags first**, through `app.parseCommand`, before it reads or writes anything. Shell completion gets a command's flags by calling it with `collectFlags` set, which makes `parseCommand` hand over the flag set and stop (`flagsOf`), so the completion can't drift from the real flags. `TestEveryCommandGivesItsFlags` checks it. What a positional argument or flag value is (an account, a folder, a key file) lives in `completion.go`.
-* The browser only picks an action. `cli` carries it out with the same code as the matching command, so the browser and the command line can't drift apart.
+* The browser only picks an action. `cli` carries it out with the same code as the matching command, so the browser and the command line can't drift apart. Its status line comes from the action's `ops.Result` (or its error), never from the wording of what was printed.
 
 ### 2.4 Design system
 Keep styling consistent with sshx's palette (`internal/ui/palette.go`):

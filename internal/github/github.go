@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -277,9 +278,11 @@ func (c *Client) Keys(k Kind) ([]string, error) {
 	return list, nil
 }
 
-// Add adds the public key at pubPath to the user's keys of kind k.
-func (c *Client) Add(k Kind, pubPath, title string) error {
-	_, err := run(c.Host, c.token, "ssh-key", "add", pubPath, "--title", title, "--type", string(k))
+// Add adds a public key, given as the line its .pub file holds, to the
+// user's keys of kind k. It goes to gh on stdin, so a key written inline in
+// an account file uploads the same way as one in a file.
+func (c *Client) Add(k Kind, publicKey, title string) error {
+	_, err := runInput(c.Host, c.token, strings.NewReader(publicKey+"\n"), "ssh-key", "add", "-", "--title", title, "--type", string(k))
 	return err
 }
 
@@ -293,7 +296,13 @@ func ActiveUser(apiHost string) (string, error) {
 // account when token is "". Host and token settings from the environment
 // are dropped, so they can't send keys anywhere doppel didn't ask for.
 func run(apiHost, token string, args ...string) (string, error) {
+	return runInput(apiHost, token, nil, args...)
+}
+
+// runInput is run with stdin for gh.
+func runInput(apiHost, token string, stdin io.Reader, args ...string) (string, error) {
 	cmd, finish := proc.Command(proc.Network, "gh", args...)
+	cmd.Stdin = stdin
 	for _, v := range os.Environ() {
 		name, _, _ := strings.Cut(v, "=")
 		switch name {

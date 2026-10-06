@@ -114,7 +114,7 @@ func (a *app) pathSuggestions(typed string, keyFiles bool) []string {
 	isKey := map[string]bool{}
 	if keyFiles {
 		for _, k := range keys.Discover(dir) {
-			isKey[filepath.Base(k)] = true
+			isKey[filepath.Base(string(k))] = true
 		}
 	}
 	sshDir := keyFiles && filepath.Clean(dir) == filepath.Clean(a.env.Home)

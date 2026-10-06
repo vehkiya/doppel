@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 )
 
@@ -29,8 +30,8 @@ type Account struct {
 	GitHubUser  string
 	Folders     []string // stored form: real path, "~/"-shortened, ending in "/"
 	Default     bool
-	AuthKey     string // private key (or agent-held .pub) for SSH; "" for ssh's own defaults
-	SigningKey  string // public key used for signing; "" when the account doesn't sign
+	AuthKey     keys.Ref // private key (or agent-held .pub) for SSH; "" for ssh's own defaults
+	SigningKey  keys.Ref // public half of the signing key; "" when the account doesn't sign
 	SignCommits bool
 	SignTags    bool
 
@@ -70,43 +71,110 @@ type Setting struct {
 	Values []string
 }
 
-// Settings lists every key doppel manages in an account file, in file order.
-// The Git keys are always written, even when they only reset a value: Git
-// applies the default account first and the folder account on top, so a key
-// the folder account left out would leak in from the default account.
-func (a *Account) Settings() []Setting {
-	optional := func(v string) []string {
-		if v == "" {
-			return nil
+// ManagedKey is one key doppel manages in every account file. Managed lists
+// them all, so adding a managed key means adding it there and nowhere else.
+type ManagedKey struct {
+	Key string
+	// Identity marks a Git setting that decides who commits, signs or logs
+	// in. whoami and doctor point out a value for it that comes from outside
+	// doppel's account files, and FromGlobal reads them for a first account.
+	Identity bool
+	// value is what an account file holds for the key: no values means the
+	// key is absent. A Git key always has a value, even one that only resets
+	// it, so it can't leak in from the default account.
+	value func(a *Account) []string
+	// read sets the account from the values in its file, so hand edits stick.
+	// It's nil for keys that are always derived from others, such as
+	// core.sshCommand, and for doppel.account, which the file name gives.
+	read func(a *Account, values []string)
+}
+
+// ReadBack reports whether the key is read back from the account file, rather
+// than derived from other keys and overwritten on every save.
+func (k ManagedKey) ReadBack() bool { return k.read != nil }
+
+// Managed lists every key doppel manages in an account file, in file order.
+var Managed = []ManagedKey{
+	{Key: KeyAccount, value: func(a *Account) []string { return []string{a.ID} }},
+	{Key: KeyDefault, value: func(a *Account) []string { return []string{strconv.FormatBool(a.Default)} },
+		read: func(a *Account, v []string) { a.Default = ParseBool(last(v)) }},
+	{Key: KeyHost, value: func(a *Account) []string { return a.Hosts },
+		read: func(a *Account, v []string) { a.Hosts = v }},
+	{Key: KeyGitHubUser, value: func(a *Account) []string { return optional(a.GitHubUser) },
+		read: func(a *Account, v []string) { a.GitHubUser = last(v) }},
+	{Key: KeyFolder, value: func(a *Account) []string { return a.Folders },
+		read: func(a *Account, v []string) {
+			for _, f := range v {
+				if !strings.HasSuffix(f, "/") {
+					f += "/"
+				}
+				a.Folders = append(a.Folders, f)
+			}
+		}},
+	{Key: KeyAuthKey, value: func(a *Account) []string { return optional(string(a.AuthKey)) },
+		read: func(a *Account, v []string) { a.AuthKey = keys.Ref(last(v)) }},
+	{Key: KeyName, Identity: true, value: func(a *Account) []string { return []string{a.Name} },
+		read: func(a *Account, v []string) { a.Name = last(v) }},
+	{Key: KeyEmail, Identity: true, value: func(a *Account) []string { return []string{a.Email} },
+		read: func(a *Account, v []string) { a.Email = last(v) }},
+	{Key: KeySigningKey, Identity: true, value: func(a *Account) []string { return []string{string(a.SigningKey)} },
+		read: func(a *Account, v []string) { a.SigningKey = keys.Ref(last(v)) }},
+	{Key: KeyGPGFormat, Identity: true, value: func(*Account) []string { return []string{"ssh"} }},
+	{Key: KeyCommitSign, Identity: true, value: func(a *Account) []string {
+		return []string{strconv.FormatBool(a.SigningKey != "" && a.SignCommits)}
+	}, read: func(a *Account, v []string) { a.SignCommits = ParseBool(last(v)) }},
+	{Key: KeyTagSign, Identity: true, value: func(a *Account) []string {
+		return []string{strconv.FormatBool(a.SigningKey != "" && a.SignTags)}
+	}, read: func(a *Account, v []string) { a.SignTags = ParseBool(last(v)) }},
+	{Key: KeySSHCommand, Identity: true, value: func(a *Account) []string { return []string{SSHCommand(a.AuthKey)} }},
+}
+
+// IdentityKeys lists the managed Git settings that decide who commits, signs
+// or logs in (ManagedKey.Identity), in file order.
+func IdentityKeys() []string {
+	var list []string
+	for _, k := range Managed {
+		if k.Identity {
+			list = append(list, k.Key)
 		}
-		return []string{v}
 	}
-	return []Setting{
-		{KeyAccount, []string{a.ID}},
-		{KeyDefault, []string{strconv.FormatBool(a.Default)}},
-		{KeyHost, a.Hosts},
-		{KeyGitHubUser, optional(a.GitHubUser)},
-		{KeyFolder, a.Folders},
-		{KeyAuthKey, optional(a.AuthKey)},
-		{KeyName, []string{a.Name}},
-		{KeyEmail, []string{a.Email}},
-		{KeySigningKey, []string{a.SigningKey}},
-		{KeyGPGFormat, []string{"ssh"}},
-		{KeyCommitSign, []string{strconv.FormatBool(a.SigningKey != "" && a.SignCommits)}},
-		{KeyTagSign, []string{strconv.FormatBool(a.SigningKey != "" && a.SignTags)}},
-		{KeySSHCommand, []string{SSHCommand(a.AuthKey)}},
+	return list
+}
+
+// Settings lists the values an account file should hold for every managed
+// key, in file order.
+func (a *Account) Settings() []Setting {
+	settings := make([]Setting, len(Managed))
+	for i, k := range Managed {
+		settings[i] = Setting{k.Key, k.value(a)}
 	}
+	return settings
+}
+
+func optional(v string) []string {
+	if v == "" {
+		return nil
+	}
+	return []string{v}
+}
+
+// last is the value Git uses for a single-valued key: the last one.
+func last(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[len(values)-1]
 }
 
 // SSHCommand is the core.sshCommand for an auth key. IdentitiesOnly stops
 // ssh-agent from offering another account's key first, since GitHub logs in
 // as whichever account owns the first key that works. With no key it's plain
 // ssh, so the account never inherits another account's key.
-func SSHCommand(key string) string {
+func SSHCommand(key keys.Ref) string {
 	if key == "" {
 		return "ssh"
 	}
-	return "ssh -i " + shellQuote(key) + " -o IdentitiesOnly=yes"
+	return "ssh -i " + shellQuote(string(key)) + " -o IdentitiesOnly=yes"
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./~@%+=:,-]+$`)
@@ -129,35 +197,14 @@ func ParseBool(v string) bool {
 	return false
 }
 
-// fromConfig builds an account from the values in its file. Keys
-// with a one-to-one Git setting are read back, so hand edits to them stick;
-// core.sshCommand is always regenerated from doppel.authKey.
+// fromConfig builds an account from the values in its file, through the
+// keys Managed reads back.
 func fromConfig(id, file string, values map[string][]string) *Account {
-	last := func(key string) string {
-		v := values[strings.ToLower(key)]
-		if len(v) == 0 {
-			return ""
+	a := &Account{ID: id, File: file}
+	for _, k := range Managed {
+		if k.read != nil {
+			k.read(a, values[strings.ToLower(k.Key)])
 		}
-		return v[len(v)-1]
-	}
-	a := &Account{
-		ID:          id,
-		Name:        last(KeyName),
-		Email:       last(KeyEmail),
-		Hosts:       values[strings.ToLower(KeyHost)],
-		GitHubUser:  last(KeyGitHubUser),
-		Default:     ParseBool(last(KeyDefault)),
-		AuthKey:     last(KeyAuthKey),
-		SigningKey:  last(KeySigningKey),
-		SignCommits: ParseBool(last(KeyCommitSign)),
-		SignTags:    ParseBool(last(KeyTagSign)),
-		File:        file,
-	}
-	for _, f := range values[strings.ToLower(KeyFolder)] {
-		if !strings.HasSuffix(f, "/") {
-			f += "/"
-		}
-		a.Folders = append(a.Folders, f)
 	}
 	return a
 }
@@ -368,4 +415,47 @@ func ValidateAll(env *paths.Env, accounts []*Account) error {
 		}
 	}
 	return nil
+}
+
+// SharedHost returns a host both accounts use, or "".
+func SharedHost(x, y *Account) string {
+	for _, h := range x.Hosts {
+		for _, g := range y.Hosts {
+			if strings.EqualFold(h, g) {
+				return h
+			}
+		}
+	}
+	return ""
+}
+
+// SharedAuthKey returns a host on which x and y log in with the same auth
+// key, or "". A host like GitHub lets a key belong to one account only, so
+// one of them would log in as the other.
+func SharedAuthKey(env *paths.Env, x, y *Account) string {
+	if x.AuthKey == "" || y.AuthKey == "" {
+		return ""
+	}
+	host := SharedHost(x, y)
+	if host == "" {
+		return ""
+	}
+	fx, errX := keys.Fingerprint(x.AuthKey.Map(env.Expand))
+	fy, errY := keys.Fingerprint(y.AuthKey.Map(env.Expand))
+	if errX != nil || errY != nil || fx != fy {
+		return ""
+	}
+	return host
+}
+
+// SigningScope says what an account signs: "commits and tags", "commits"
+// or "tags".
+func SigningScope(commits, tags bool) string {
+	switch {
+	case commits && tags:
+		return "commits and tags"
+	case commits:
+		return "commits"
+	}
+	return "tags"
 }

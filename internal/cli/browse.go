@@ -1,15 +1,12 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"strings"
 
 	"charm.land/huh/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/vehkiya/doppel/internal/accounts"
-	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/tui"
 	"github.com/vehkiya/doppel/internal/ui"
 	"github.com/vehkiya/doppel/internal/update"
@@ -21,7 +18,7 @@ import (
 func (a *app) browse() int {
 	selected, status := "", ""
 	for {
-		a.githubHosts = nil // gh may have signed in to a host since the browser last opened
+		a.github.Forget() // gh may have signed in to a host since the browser last opened
 		list, err := accounts.Load(a.env)
 		if err != nil {
 			return a.fail(err)
@@ -63,6 +60,7 @@ func (a *app) updateCheck() func() (string, bool) {
 // doppel updated itself.
 func (a *app) runAction(act tui.Action) (status string, quit bool) {
 	defer a.unlockWrites() // a command that failed early may still hold the lock
+	a.warnings = 0
 	switch act.Kind {
 	case tui.Upgrade:
 		installed, err := update.Perform(version.Version, a.stdout, false)
@@ -90,52 +88,37 @@ func (a *app) runAction(act tui.Action) (status string, quit bool) {
 	case tui.Bind:
 		folder, err := a.askFolder(act.ID)
 		if err != nil {
-			return statusOf(err.Error(), ""), false
+			return a.status(nil, err), false
 		}
-		return a.captured(func() int { return a.cmdBind([]string{act.ID, folder}) }), false
+		return a.status(a.bind(act.ID, []string{folder}, writeFlags{})), false
 	case tui.Add:
-		return a.captured(func() int { return a.addWithWizard("", writeFlags{}) }), false
+		return a.status(a.addWithWizard("", writeFlags{})), false
 	case tui.Edit:
-		return a.captured(func() int { return a.cmdEdit([]string{act.ID}) }), false
+		return a.status(a.editWithWizard(act.ID, writeFlags{})), false
 	case tui.Delete:
-		return a.captured(func() int { return a.cmdRm([]string{act.ID, "--yes"}) }), false
+		// The browser asked before deleting.
+		return a.status(a.remove(act.ID, writeFlags{yes: true})), false
 	case tui.SetDefault:
-		return a.captured(func() int { return a.cmdDefault([]string{act.ID}) }), false
+		return a.status(a.setDefault(act.ID, writeFlags{})), false
 	}
 	return "", false
 }
 
-// captured runs a command, showing its output as usual, and sums it up as a
-// status for the browser. Warnings and errors (other than a cancellation)
-// wait for Enter, so they can be read before the browser covers them.
-func (a *app) captured(run func() int) string {
-	var out, errOut bytes.Buffer
-	stdout, stderr := a.stdout, a.stderr
-	a.stdout, a.stderr = io.MultiWriter(stdout, &out), io.MultiWriter(stderr, &errOut)
-	run()
-	a.stdout, a.stderr = stdout, stderr
-
-	problems := ansi.Strip(errOut.String())
-	if strings.TrimSpace(problems) != "" && !strings.Contains(problems, errCancelled.Error()) {
+// status sums up a change for the browser's status line: its result, or
+// the error that stopped it. An error or a warning (other than the user
+// cancelling) waits for Enter, so it can be read before the browser covers it.
+func (a *app) status(res *ops.Result, err error) string {
+	switch {
+	case err != nil:
+		a.fail(err)
+		if !cancelled(err) {
+			a.pause()
+		}
+		return "✗ " + err.Error()
+	case a.warnings > 0:
 		a.pause()
 	}
-	return statusOf(ansi.Strip(out.String()), problems)
-}
-
-// statusOf picks the line worth showing from a command's output: an error,
-// else its result.
-func statusOf(out, problems string) string {
-	for _, line := range strings.Split(problems, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "✗") {
-			return strings.TrimSpace(line)
-		}
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "✓") {
-			return strings.TrimSpace(line)
-		}
-	}
-	return ""
+	return "✓ " + res.Message
 }
 
 // askFolder asks for a folder to bind to an account.
@@ -164,26 +147,17 @@ func (a *app) pause() {
 
 // keyInfo works out how each account's keys are kept, for the browser.
 func (a *app) keyInfo(list []*accounts.Account) map[string]tui.KeyInfo {
+	ctx := a.opsContext(writeFlags{})
 	info := map[string]tui.KeyInfo{}
 	for _, acc := range list {
 		var ki tui.KeyInfo
 		if acc.AuthKey != "" {
-			ki.Auth = a.keyWords(acc.AuthKey)
+			ki.Auth = ops.KeyStatus(ctx, acc.AuthKey)
 		}
-		if acc.SigningKey != "" && keys.PublicPath(acc.SigningKey) != keys.PublicPath(acc.AuthKey) {
-			ki.Signing = a.keyWords(strings.TrimSuffix(acc.SigningKey, ".pub"))
+		if acc.SigningKey != "" && !acc.SigningKey.SameKey(acc.AuthKey) {
+			ki.Signing = ops.KeyStatus(ctx, acc.SigningKey)
 		}
 		info[acc.ID] = ki
 	}
 	return info
-}
-
-// keyWords describes how a key is kept, such as ["passphrase", "in agent"].
-func (a *app) keyWords(key string) []string {
-	path := a.env.Expand(key)
-	words := []string{keys.CheckProtection(path).String()}
-	if loaded, running := keys.InAgent(path); running && loaded {
-		words = append(words, "in agent")
-	}
-	return words
 }

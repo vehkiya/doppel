@@ -406,7 +406,7 @@ func (m Model) details(acc *accounts.Account) string {
 	if acc.AuthKey == "" {
 		row("Auth key", "ssh's own keys")
 	} else {
-		row("Auth key", acc.AuthKey)
+		row("Auth key", acc.AuthKey.Display())
 		m.keyBadges(&b, info.Auth)
 	}
 	if acc.SigningKey == "" {
@@ -421,8 +421,8 @@ func (m Model) details(acc *accounts.Account) string {
 		case !acc.SignCommits && !acc.SignTags:
 			scope = "off (key kept)"
 		}
-		row("Signing", scope, acc.SigningKey)
-		if strings.TrimSuffix(acc.SigningKey, ".pub") != strings.TrimSuffix(acc.AuthKey, ".pub") {
+		row("Signing", scope, acc.SigningKey.Display())
+		if !acc.SigningKey.SameKey(acc.AuthKey) {
 			m.keyBadges(&b, info.Signing) // a signing key that's the auth key shows its badges once
 		}
 	}

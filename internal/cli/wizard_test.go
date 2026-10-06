@@ -178,17 +178,14 @@ func TestBrowserActions(t *testing.T) {
 	if acc := loadAccount(t, s, "personal"); !acc.Default {
 		t.Error("personal isn't the default after deleting work")
 	}
-}
-
-func TestStatusOf(t *testing.T) {
-	cases := []struct{ out, problems, want string }{
-		{"✓ Added account work\n  created ~/x\n", "", "✓ Added account work"},
-		{"", "⚠ a warning\n✗ something failed\n", "✗ something failed"},
-		{"Dry run\n", "", ""},
+	// The status comes from the result, not from the wording of the output:
+	// an error shows as it is, and waits for Enter.
+	s.stdin = script("")
+	a = s.newApp(s.Home)
+	if got, _ := a.runAction(tui.Action{Kind: tui.SetDefault, ID: "ghost"}); got != "✗ no account named ghost" {
+		t.Errorf("failed action: status %q", got)
 	}
-	for _, c := range cases {
-		if got := statusOf(c.out, c.problems); got != c.want {
-			t.Errorf("statusOf(%q, %q) = %q, want %q", c.out, c.problems, got, c.want)
-		}
+	if !strings.Contains(s.stdout.String(), "Press Enter") {
+		t.Error("the browser didn't wait for Enter after an error")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/keys"
+	"github.com/vehkiya/doppel/internal/ops"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
@@ -26,13 +27,6 @@ const (
 	keyNone     = "none"
 	keyWithAuth = "auth"
 )
-
-// wizardResult is what the account wizard decided, ready to save.
-type wizardResult struct {
-	keys        keyChanges
-	folders     []string // as typed; bindFolders normalizes them
-	makeDefault bool
-}
 
 // answers holds the wizard's fields while it runs. Later steps and the
 // review read them, so they follow earlier answers even after going back.
@@ -139,9 +133,9 @@ func wizardForm(ans *answers, steps []step) *huh.Form {
 
 // accountWizard walks through an account's settings, starting from acc: an
 // account being edited, or a new one (maybe prefilled from the global Git
-// config). Only when the user saves does it change acc's fields; it returns
-// the changes that need more than a field: keys, folders and the default.
-func (a *app) accountWizard(list []*accounts.Account, acc *accounts.Account, isNew bool) (wizardResult, error) {
+// config). It returns the answers once the user saves; addRequest and
+// editRequest turn them into the change to make. acc isn't changed.
+func (a *app) accountWizard(list []*accounts.Account, acc *accounts.Account, isNew bool) (*answers, error) {
 	title := "Edit account " + acc.ID
 	if isNew {
 		title = "New account"
@@ -155,12 +149,12 @@ func (a *app) accountWizard(list []*accounts.Account, acc *accounts.Account, isN
 
 	ans, steps := a.wizardSteps(list, acc, isNew)
 	if err := a.runSteps(ans, steps); err != nil {
-		return wizardResult{}, err
+		return nil, err
 	}
 	if !ans.Save {
-		return wizardResult{}, errCancelled
+		return nil, errCancelled
 	}
-	return a.applyAnswers(ans, acc), nil
+	return ans, nil
 }
 
 // wizardSteps builds the wizard's pages around answers prefilled from acc.
@@ -206,7 +200,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 
 	sshDir := filepath.Join(a.env.Home, ".ssh")
 	discovered := keys.Discover(sshDir)
-	anyGitHub := func() bool { return slices.ContainsFunc(splitList(ans.Hosts), a.isGitHub) }
+	anyGitHub := func() bool { return a.github.Any(splitList(ans.Hosts)) }
 	prevID, prevName, prevEmail := acc.ID, acc.Name, acc.Email
 
 	var identity []huh.Field
@@ -366,15 +360,15 @@ func (ans *answers) accountID(acc *accounts.Account) string {
 
 // authOptions lists the auth key choices: keep the current key, generate
 // one, a key found in ~/.ssh, another file, or none.
-func (a *app) authOptions(acc *accounts.Account, discovered []string) []huh.Option[string] {
+func (a *app) authOptions(acc *accounts.Account, discovered []keys.Ref) []huh.Option[string] {
 	var options []huh.Option[string]
 	if acc.AuthKey != "" {
-		options = append(options, huh.NewOption("Keep "+acc.AuthKey, keyKeep))
+		options = append(options, huh.NewOption("Keep "+acc.AuthKey.Display(), keyKeep))
 	}
 	options = append(options, huh.NewOption("Generate a new key", keyGenerate))
 	for _, k := range discovered {
-		if a.env.Shorten(k) != acc.AuthKey {
-			options = append(options, huh.NewOption(keyLabel(a.env.Shorten(k)), k))
+		if short := k.Map(a.env.Shorten); short != acc.AuthKey {
+			options = append(options, huh.NewOption(keyLabel(short), string(k)))
 		}
 	}
 	return append(options,
@@ -385,17 +379,17 @@ func (a *app) authOptions(acc *accounts.Account, discovered []string) []huh.Opti
 // signingOptions lists the signing choices: keep the current key, sign with
 // the auth key, generate a separate key, a key found in ~/.ssh, another
 // file, or don't sign.
-func (a *app) signingOptions(acc *accounts.Account, discovered []string) []huh.Option[string] {
+func (a *app) signingOptions(acc *accounts.Account, discovered []keys.Ref) []huh.Option[string] {
 	var options []huh.Option[string]
 	if acc.SigningKey != "" {
-		options = append(options, huh.NewOption("Keep "+acc.SigningKey, keyKeep))
+		options = append(options, huh.NewOption("Keep "+acc.SigningKey.Display(), keyKeep))
 	}
 	options = append(options,
 		huh.NewOption("Sign with the auth key", keyWithAuth),
 		huh.NewOption("Generate a separate signing key", keyGenerate))
 	for _, k := range discovered {
-		if a.env.Shorten(keys.PublicPath(k)) != acc.SigningKey {
-			options = append(options, huh.NewOption(keyLabel(a.env.Shorten(k)), k))
+		if short := k.Map(a.env.Shorten); short.Public() != acc.SigningKey {
+			options = append(options, huh.NewOption(keyLabel(short), string(k)))
 		}
 	}
 	return append(options,
@@ -485,61 +479,100 @@ func (a *app) keyPathValidator(signing bool) func(string) error {
 		if strings.TrimSpace(s) == "" {
 			return errors.New("enter a key file")
 		}
-		_, err := a.keyPath(strings.TrimSpace(s), signing)
+		_, err := ops.KeyPath(a.opsContext(writeFlags{}), strings.TrimSpace(s), signing)
 		return err
 	}
 }
 
-// applyAnswers copies the saved answers into acc and works out the rest.
-func (a *app) applyAnswers(ans *answers, acc *accounts.Account) wizardResult {
-	acc.ID = cmpOr(strings.TrimSpace(ans.ID), acc.ID)
-	acc.Name = cmpOr(strings.TrimSpace(ans.Name), acc.Name)
-	acc.Email = cmpOr(strings.TrimSpace(ans.Email), acc.Email)
-	acc.Hosts = splitList(ans.Hosts)
-	if len(acc.Hosts) == 0 {
-		acc.Hosts = []string{accounts.DefaultHost}
+// addRequest turns the saved answers into the request that adds the
+// account, starting from start: a blank account, or one read from the
+// global Git config, whose keys the "keep" choices keep.
+func (a *app) addRequest(ans *answers, start *accounts.Account) ops.AddRequest {
+	acc := *start
+	acc.ID, acc.Name, acc.Email = a.answeredIdentity(ans, start)
+	acc.Hosts = answeredHosts(ans)
+	if user, ok := a.answeredGitHubUser(ans); ok {
+		acc.GitHubUser = user
 	}
-	// The GitHub username page only shows for a GitHub host. When it's
-	// hidden, its answer (perhaps left half-typed by going back) doesn't count.
-	if slices.ContainsFunc(acc.Hosts, a.isGitHub) {
-		acc.GitHubUser = strings.TrimSpace(ans.GitHubUser)
-	}
+	return ops.AddRequest{Account: &acc, Folders: splitList(ans.Folders), Default: ans.Default, Keys: a.answeredKeys(ans)}
+}
 
-	res := wizardResult{folders: splitList(ans.Folders), makeDefault: ans.Default}
+// editRequest turns the saved answers into the request that changes acc.
+// The wizard asks for every setting, so the request sets them all.
+func (a *app) editRequest(ans *answers, acc *accounts.Account) ops.EditRequest {
+	_, name, email := a.answeredIdentity(ans, acc)
+	folders, makeDefault := splitList(ans.Folders), ans.Default
+	req := ops.EditRequest{
+		ID: acc.ID, Name: &name, Email: &email, Hosts: answeredHosts(ans),
+		Folders: &folders, Default: &makeDefault, Keys: a.answeredKeys(ans),
+	}
+	if user, ok := a.answeredGitHubUser(ans); ok {
+		req.GitHubUser = &user
+	}
+	return req
+}
+
+// answeredIdentity is the ID, name and email answered, or acc's for an
+// answer left empty (accessible prompts keep a value that way).
+func (a *app) answeredIdentity(ans *answers, acc *accounts.Account) (id, name, email string) {
+	return cmpOr(strings.TrimSpace(ans.ID), acc.ID), cmpOr(strings.TrimSpace(ans.Name), acc.Name),
+		cmpOr(strings.TrimSpace(ans.Email), acc.Email)
+}
+
+func answeredHosts(ans *answers) []string {
+	if hosts := splitList(ans.Hosts); len(hosts) > 0 {
+		return hosts
+	}
+	return []string{accounts.DefaultHost}
+}
+
+// answeredGitHubUser is the GitHub username answered. The page only shows
+// for a GitHub host; when it's hidden, its answer (perhaps left half-typed
+// by going back) doesn't count, and ok is false.
+func (a *app) answeredGitHubUser(ans *answers) (user string, ok bool) {
+	if !a.github.Any(answeredHosts(ans)) {
+		return "", false
+	}
+	return strings.TrimSpace(ans.GitHubUser), true
+}
+
+// answeredKeys turns the key pages' answers into key changes.
+func (a *app) answeredKeys(ans *answers) ops.KeyChanges {
+	var ch ops.KeyChanges
 	keyFile := func(choice, typed string) string {
 		if choice == keyPathEtc {
-			return typed
+			return strings.TrimSpace(typed)
 		}
 		return a.env.Shorten(choice)
 	}
 	switch ans.Auth {
 	case keyKeep:
 	case keyGenerate:
-		res.keys.generateAuth = true
+		ch.GenerateAuth = true
 	case keyNone:
 		none := ""
-		res.keys.auth = &none
+		ch.Auth = &none
 	default:
-		path := keyFile(ans.Auth, strings.TrimSpace(ans.AuthPath))
-		res.keys.auth = &path
+		path := keyFile(ans.Auth, ans.AuthPath)
+		ch.Auth = &path
 	}
 	switch ans.Signing {
 	case keyKeep:
 	case keyNone:
 		none := ""
-		res.keys.signing = &none
-		return res
+		ch.Signing = &none
+		return ch
 	case keyWithAuth:
-		res.keys.signWithAuth = true
+		ch.SignWithAuth = true
 	case keyGenerate:
-		res.keys.generateSigning = true
+		ch.GenerateSigning = true
 	default:
-		path := keyFile(ans.Signing, strings.TrimSpace(ans.SigningPath))
-		res.keys.signing = &path
+		path := keyFile(ans.Signing, ans.SigningPath)
+		ch.Signing = &path
 	}
 	commits, tags := slices.Contains(ans.Sign, "commits"), slices.Contains(ans.Sign, "tags")
-	res.keys.signCommits, res.keys.signTags = &commits, &tags
-	return res
+	ch.SignCommits, ch.SignTags = &commits, &tags
+	return ch
 }
 
 // review summarizes the answers before saving. It's redrawn as answers
@@ -560,8 +593,8 @@ func (a *app) review(ans *answers, acc *accounts.Account) string {
 		}
 		return a.env.Shorten(choice)
 	}
-	auth := cmpOr(describe(ans.Auth, ans.AuthPath, acc.AuthKey, false), "ssh's own keys")
-	signing := describe(ans.Signing, ans.SigningPath, acc.SigningKey, true)
+	auth := cmpOr(describe(ans.Auth, ans.AuthPath, acc.AuthKey.Display(), false), "ssh's own keys")
+	signing := describe(ans.Signing, ans.SigningPath, acc.SigningKey.Display(), true)
 	switch {
 	case ans.Signing == keyWithAuth:
 		signing = "with the auth key"
@@ -625,11 +658,11 @@ func cmpOr(values ...string) string {
 }
 
 // keyLabel names a discovered key in a list, noting agent-held ones.
-func keyLabel(path string) string {
-	if strings.HasSuffix(path, ".pub") {
-		return path + " (private key in an agent)"
+func keyLabel(key keys.Ref) string {
+	if key.IsPublic() {
+		return key.Display() + " (private key in an agent)"
 	}
-	return path
+	return key.Display()
 }
 
 // splitList splits a comma-separated answer.
@@ -658,67 +691,45 @@ func onlyWriteFlags(fs *flag.FlagSet) bool {
 // addWithWizard adds an account by asking for each setting. With no
 // accounts yet, it offers to start from the identity in the global Git
 // config.
-func (a *app) addWithWizard(id string, w writeFlags) int {
-	list, err := accounts.Load(a.env)
-	if err != nil {
-		return a.fail(err)
-	}
-	acc := &accounts.Account{ID: id, Hosts: []string{accounts.DefaultHost}}
-	if len(list) == 0 {
-		if found, source, ok := accounts.FromGlobal(a.env); ok {
-			start := true
-			question := fmt.Sprintf("Start from the identity in %s: %s <%s>?", a.env.Shorten(source), found.Name, found.Email)
-			if err := a.runForm(huh.NewForm(huh.NewGroup(
-				huh.NewConfirm().Title(question).
-					Description("Its name, email and SSH keys become your first account, the default").
-					Affirmative("Yes").Negative("No, start fresh").Value(&start),
-			))); err != nil {
-				return a.fail(err)
-			}
-			if start {
-				found.ID = id
-				acc = found
+func (a *app) addWithWizard(id string, w writeFlags) (*ops.Result, error) {
+	return a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		start := &accounts.Account{ID: id, Hosts: []string{accounts.DefaultHost}}
+		if len(list) == 0 {
+			if found, source, ok := accounts.FromGlobal(a.env); ok {
+				use := true
+				question := fmt.Sprintf("Start from the identity in %s: %s <%s>?", a.env.Shorten(source), found.Name, found.Email)
+				if err := a.runForm(huh.NewForm(huh.NewGroup(
+					huh.NewConfirm().Title(question).
+						Description("Its name, email and SSH keys become your first account, the default").
+						Affirmative("Yes").Negative("No, start fresh").Value(&use),
+				))); err != nil {
+					return nil, err
+				}
+				if use {
+					found.ID = id
+					start = found
+				}
 			}
 		}
-	}
-	res, err := a.accountWizard(list, acc, true)
-	if err != nil {
-		return a.fail(err)
-	}
-	pending, err := a.applyKeyChanges(acc, res.keys)
-	if err != nil {
-		return a.fail(err)
-	}
-	if err := a.bindFolders(list, acc, res.folders, w); err != nil {
-		return a.fail(err)
-	}
-	list = append(list, acc)
-	if res.makeDefault || len(list) == 1 {
-		accounts.SetDefault(list, acc)
-	}
-	a.warnSharedKeys(list)
-	return a.save(list, w, fmt.Sprintf("Added account %s", acc.ID), pending...)
+		ans, err := a.accountWizard(list, start, true)
+		if err != nil {
+			return nil, err
+		}
+		return ops.Add(ctx, list, a.addRequest(ans, start))
+	})
 }
 
 // editWithWizard changes an account by walking through its settings.
-func (a *app) editWithWizard(list []*accounts.Account, acc *accounts.Account, w writeFlags) int {
-	res, err := a.accountWizard(list, acc, false)
-	if err != nil {
-		return a.fail(err)
-	}
-	pending, err := a.applyKeyChanges(acc, res.keys)
-	if err != nil {
-		return a.fail(err)
-	}
-	acc.Folders = nil
-	if err := a.bindFolders(list, acc, res.folders, w); err != nil {
-		return a.fail(err)
-	}
-	if res.makeDefault {
-		accounts.SetDefault(list, acc)
-	} else {
-		acc.Default = false
-	}
-	a.warnSharedKeys(list)
-	return a.save(list, w, fmt.Sprintf("Updated account %s", acc.ID), pending...)
+func (a *app) editWithWizard(id string, w writeFlags) (*ops.Result, error) {
+	return a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		acc, err := ops.Find(list, id)
+		if err != nil {
+			return nil, err
+		}
+		ans, err := a.accountWizard(list, acc, false)
+		if err != nil {
+			return nil, err
+		}
+		return ops.Edit(ctx, list, a.editRequest(ans, acc))
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 )
 
@@ -15,7 +16,7 @@ import (
 // is false when there's no name and email to start from.
 func FromGlobal(env *paths.Env) (acc *Account, source string, ok bool) {
 	wanted := map[string]string{}
-	for _, key := range []string{KeyName, KeyEmail, KeySigningKey, KeyGPGFormat, KeyCommitSign, KeyTagSign, KeySSHCommand} {
+	for _, key := range IdentityKeys() {
 		wanted[strings.ToLower(key)] = key
 	}
 	last := map[string]string{}
@@ -40,12 +41,12 @@ func FromGlobal(env *paths.Env) (acc *Account, source string, ok bool) {
 	}
 	acc = &Account{Name: last[KeyName], Email: last[KeyEmail], Hosts: []string{DefaultHost}}
 	if strings.EqualFold(last[KeyGPGFormat], "ssh") && last[KeySigningKey] != "" {
-		acc.SigningKey = shortenKey(env, last[KeySigningKey])
+		acc.SigningKey = keys.Ref(last[KeySigningKey]).Map(env.Expand).Map(env.Shorten)
 		acc.SignCommits = ParseBool(last[KeyCommitSign])
 		acc.SignTags = ParseBool(last[KeyTagSign])
 	}
 	if key := identityFile(last[KeySSHCommand]); key != "" {
-		acc.AuthKey = shortenKey(env, key)
+		acc.AuthKey = keys.Ref(key).Map(env.Expand).Map(env.Shorten)
 	}
 	return acc, source, true
 }
@@ -62,11 +63,4 @@ func identityFile(command string) string {
 		}
 	}
 	return ""
-}
-
-func shortenKey(env *paths.Env, key string) string {
-	if strings.HasPrefix(key, "key::") {
-		return key
-	}
-	return env.Shorten(env.Expand(key))
 }

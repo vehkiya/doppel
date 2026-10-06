@@ -21,6 +21,16 @@ func KeychainSupported() bool {
 	return finish(cmd.Run()) == nil
 }
 
+// LoadCommand is the command that loads key into the agent, so nothing asks
+// for its passphrase. With keychain (macOS, Apple's ssh) it also keeps the
+// passphrase in the Keychain, so the key comes back after logging in again.
+func LoadCommand(key Ref, keychain bool) string {
+	if keychain {
+		return "ssh-add --apple-use-keychain " + key.PrivatePath()
+	}
+	return "ssh-add " + key.PrivatePath()
+}
+
 // AddToKeychain loads key into the agent with Apple's ssh-add and keeps its
 // passphrase in the macOS Keychain. ssh-add asks for the passphrase on the
 // terminal through stdin, stdout and stderr.

@@ -16,21 +16,21 @@ import (
 func TestReadPublic(t *testing.T) {
 	s := testenv.New(t)
 	key := s.Key("id_work", "jane@acme.com", "")
-	line, err := keys.ReadPublicLine(key)
+	line, err := keys.ReadPublicLine(keys.Ref(key))
 	if err != nil || !strings.HasPrefix(line, "ssh-ed25519 ") || !strings.HasSuffix(line, " jane@acme.com") {
 		t.Fatalf("ReadPublicLine = %q, %v", line, err)
 	}
-	pub, err := keys.ReadPublic(key + ".pub")
+	pub, err := keys.ReadPublic(keys.Ref(key + ".pub"))
 	if err != nil || pub != strings.TrimSuffix(line, " jane@acme.com") {
 		t.Errorf("ReadPublic(.pub) = %q, %v; want the key without its comment", pub, err)
 	}
-	if lit, err := keys.ReadPublic(keys.LiteralPrefix + line); err != nil || lit != pub {
+	if lit, err := keys.ReadPublic(keys.Ref(keys.LiteralPrefix + line)); err != nil || lit != pub {
 		t.Errorf("ReadPublic(literal) = %q, %v", lit, err)
 	}
 
 	s.Write("not-a-key.pub", "hello world\n")
 	for _, bad := range []string{s.Path("not-a-key.pub"), s.Path("missing"), keys.LiteralPrefix + "ssh-ed25519 !!!"} {
-		if _, err := keys.ReadPublic(bad); err == nil {
+		if _, err := keys.ReadPublic(keys.Ref(bad)); err == nil {
 			t.Errorf("ReadPublic(%q) succeeded", bad)
 		}
 	}
@@ -44,7 +44,7 @@ func TestFingerprintMatchesOpenSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := strings.Fields(string(out))[1]
-	if got, err := keys.Fingerprint(key); err != nil || got != want {
+	if got, err := keys.Fingerprint(keys.Ref(key)); err != nil || got != want {
 		t.Errorf("Fingerprint = %q, %v; ssh-keygen says %q", got, err, want)
 	}
 }
@@ -60,14 +60,16 @@ func TestCheckProtection(t *testing.T) {
 	_ = os.Remove(strings.TrimSuffix(agentOnly, ".pub"))
 
 	cases := map[string]keys.Protection{
-		plain:                                 keys.Unencrypted,
-		locked:                                keys.Encrypted,
-		agentOnly:                             keys.AgentOnly,
-		strings.TrimSuffix(agentOnly, ".pub"): keys.AgentOnly, // only the .pub is left
-		s.Path(".ssh/missing"):                keys.Unknown,
+		plain:                                   keys.Unencrypted,
+		locked:                                  keys.Encrypted,
+		locked + ".pub":                         keys.Encrypted, // a signing key, named by its public half
+		agentOnly:                               keys.AgentOnly,
+		keys.LiteralPrefix + "ssh-ed25519 AAAA": keys.AgentOnly,
+		strings.TrimSuffix(agentOnly, ".pub"):   keys.AgentOnly, // only the .pub is left
+		s.Path(".ssh/missing"):                  keys.Unknown,
 	}
 	for key, want := range cases {
-		if got := keys.CheckProtection(key); got != want {
+		if got := keys.CheckProtection(keys.Ref(key)); got != want {
 			t.Errorf("CheckProtection(%s) = %v, want %v", filepath.Base(key), got, want)
 		}
 	}
@@ -149,22 +151,22 @@ func TestLogin(t *testing.T) {
 func TestSignCheck(t *testing.T) {
 	s := testenv.New(t)
 	key := s.Key("id_work", "jane@acme.com", "")
-	pub, err := keys.ReadPublic(key)
+	pub, err := keys.ReadPublic(keys.Ref(key))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Write("allowed_signers", "jane@acme.com namespaces=\"git\" "+pub+"\n")
 	signers := s.Path("allowed_signers")
 
-	if err := keys.SignCheck(key+".pub", "jane@acme.com", signers); err != nil {
+	if err := keys.SignCheck(keys.Ref(key+".pub"), "jane@acme.com", signers); err != nil {
 		t.Errorf("SignCheck: %v", err)
 	}
-	if err := keys.SignCheck(key+".pub", "someone@else.com", signers); err == nil || !strings.Contains(err.Error(), "couldn't verify") {
+	if err := keys.SignCheck(keys.Ref(key+".pub"), "someone@else.com", signers); err == nil || !strings.Contains(err.Error(), "couldn't verify") {
 		t.Errorf("SignCheck for an email that isn't trusted: %v", err)
 	}
 	// With a passphrase and nothing to ask for it, signing fails rather than waiting.
 	locked := s.Key("id_locked", "jane@acme.com", "a passphrase")
-	if err := keys.SignCheck(locked+".pub", "jane@acme.com", signers); err == nil || !strings.Contains(err.Error(), "couldn't sign") {
+	if err := keys.SignCheck(keys.Ref(locked+".pub"), "jane@acme.com", signers); err == nil || !strings.Contains(err.Error(), "couldn't sign") {
 		t.Errorf("SignCheck with a locked key: %v", err)
 	}
 }
@@ -184,14 +186,56 @@ func TestToolsThatHangAreStopped(t *testing.T) {
 	s.FakeCommand("ssh", "sleep 30")
 
 	start := time.Now()
-	if loaded, running := keys.InAgent(key); loaded || running {
+	if loaded, running := keys.InAgent(keys.Ref(key)); loaded || running {
 		t.Errorf("InAgent = %v, %v; want no answer from a hung agent", loaded, running)
 	}
-	res := keys.Login("github.com", key, true)
+	res := keys.Login("github.com", keys.Ref(key), true)
 	if res.Accepted || !strings.Contains(res.Problem, "ssh didn't finish within 200ms") {
 		t.Errorf("Login = %+v, want it stopped with a message naming ssh", res)
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("took %s; the tools weren't stopped", elapsed)
+	}
+}
+
+func TestRef(t *testing.T) {
+	literal := keys.Ref(keys.LiteralPrefix + "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample jane@acme.com")
+	cases := []struct {
+		ref               keys.Ref
+		private, public   string
+		pub               keys.Ref
+		literal, isPublic bool
+	}{
+		{"~/.ssh/id_work", "~/.ssh/id_work", "~/.ssh/id_work.pub", "~/.ssh/id_work.pub", false, false},
+		{"~/.ssh/id_work.pub", "~/.ssh/id_work", "~/.ssh/id_work.pub", "~/.ssh/id_work.pub", false, true},
+		{literal, "", "", literal, true, true},
+		{"", "", "", "", false, false},
+	}
+	for _, c := range cases {
+		if got := c.ref.PrivatePath(); got != c.private {
+			t.Errorf("%q.PrivatePath() = %q, want %q", c.ref, got, c.private)
+		}
+		if got := c.ref.PublicPath(); got != c.public {
+			t.Errorf("%q.PublicPath() = %q, want %q", c.ref, got, c.public)
+		}
+		if got := c.ref.Public(); got != c.pub {
+			t.Errorf("%q.Public() = %q, want %q", c.ref, got, c.pub)
+		}
+		if c.ref.IsLiteral() != c.literal || c.ref.IsPublic() != c.isPublic {
+			t.Errorf("%q: IsLiteral %v, IsPublic %v", c.ref, c.ref.IsLiteral(), c.ref.IsPublic())
+		}
+	}
+	if !keys.Ref("~/.ssh/id_work").SameKey("~/.ssh/id_work.pub") || keys.Ref("").SameKey("") || literal.SameKey("~/.ssh/id_work") {
+		t.Error("SameKey compares the wrong halves")
+	}
+	expand := func(p string) string { return strings.Replace(p, "~", "/home/jane", 1) }
+	if got := keys.Ref("~/.ssh/id_work").Map(expand); got != "/home/jane/.ssh/id_work" {
+		t.Errorf("Map = %q", got)
+	}
+	if got := literal.Map(expand); got != literal {
+		t.Errorf("Map changed a literal: %q", got)
+	}
+	if got := literal.Display(); got != "inline ssh-ed25519 AAAAC3NzaC1lZDI1…" {
+		t.Errorf("Display = %q", got)
 	}
 }
