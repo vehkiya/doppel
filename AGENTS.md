@@ -72,6 +72,7 @@ Before committing, all of the following must pass cleanly:
 * Run every form through `app.runForm`. It applies the theme and `formKeyMap` (Esc and Ctrl+C cancel; select filtering is off so Esc means one thing), and switches to accessible mode for `$ACCESSIBLE` and for tests.
 * Validate a prefilled field with `keepIfEmpty`. In accessible mode an empty answer means "keep the value", and Huh validates the typed text before falling back to it.
 * Commands only ask when they have no flags and a terminal (`onlyWriteFlags`). Scripts must never get a question.
+* **Every command parses its flags first**, through `app.parseCommand`, before it reads or writes anything. Shell completion gets a command's flags by calling it with `collectFlags` set, which makes `parseCommand` hand over the flag set and stop (`flagsOf`), so the completion can't drift from the real flags. `TestEveryCommandGivesItsFlags` checks it. What a positional argument or flag value is (an account, a folder, a key file) lives in `completion.go`.
 * The browser only picks an action. `cli` carries it out with the same code as the matching command, so the browser and the command line can't drift apart.
 
 ### 2.4 Design system

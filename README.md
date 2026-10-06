@@ -112,6 +112,7 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 | `doppel doctor [--fix]` | Checks for anything that could make Git use the wrong account; `--fix` redoes doppel's own files |
 | `doppel update [--check] [--force]` | Installs the latest signed release over this binary (`--check` only looks, `--force` reinstalls the current one) |
 | `doppel uninstall` | Removes doppel from your Git config and `allowed_signers`; accounts and keys are kept |
+| `doppel completion zsh\|bash\|fish` | Prints a shell completion script |
 
 `ls`, `rm` and `update` also answer to `list`, `remove` or `delete`, and `upgrade`.
 
@@ -119,6 +120,16 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 - Auth key: `--auth-key <key>` or `--generate-auth-key`. On `edit`, `--auth-key ""` goes back to ssh's own keys.
 - Signing key: `--signing-key <key>`, `--generate-signing-key`, `--sign-with-auth-key`, or `--no-signing`.
 - `--sign-commits=false` or `--sign-tags=false` sign only tags, or only commits.
+
+**Shell completion** covers commands, flags, account IDs, bound folders and key files, for `doppel` and `dop`. Load it from your shell's startup file:
+
+```bash
+source <(doppel completion zsh)     # ~/.zshrc, after compinit
+source <(doppel completion bash)    # ~/.bashrc
+doppel completion fish | source     # ~/.config/fish/config.fish
+```
+
+With [configsh](https://github.com/vehkiya/configsh), `.zshrc` already does this.
 
 Commands that change files accept `--dry-run` and `--yes`. Set `ACCESSIBLE=1` for plain prompts instead of interactive forms, for screen readers. Set `DOPPEL_NO_UPDATE_CHECK=1` to stop the browser checking for new releases.
 

@@ -87,7 +87,14 @@ func (f *accountFlags) register(fs *flag.FlagSet) {
 
 // parseCommand parses a command's flags, printing its usage on errors and
 // for --help. ok is false when the command should stop with code.
+//
+// Every command calls it before doing anything else, so shell completion
+// can learn the command's flags (collectFlags) without running it.
 func (a *app) parseCommand(fs *flag.FlagSet, args []string, usage string) (positional []string, code int, ok bool) {
+	if a.collectFlags != nil {
+		a.collectFlags(fs)
+		return nil, 0, false
+	}
 	positional, err := parseFlags(fs, args)
 	if errors.Is(err, flag.ErrHelp) {
 		a.printf("Usage: %s\n", usage)
