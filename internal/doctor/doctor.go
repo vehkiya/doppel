@@ -257,17 +257,17 @@ func (c *checker) account(acc *accounts.Account) {
 		}
 	}
 
-	if repos := httpsRepos(env, acc.Folders); len(repos) > 0 {
-		shown := repos
-		if len(shown) > 3 {
-			shown = append(shown[:3:3], "…")
+	repos := httpsRepos(env, acc.Folders)
+	for i, r := range repos {
+		if i == maxHTTPSRepos {
+			c.warn("Switch these first, then run doctor again to see the rest", "…and %s in its folders use HTTPS", Plural(len(repos)-i, "more repo"))
+			break
 		}
-		verb := "fetch"
-		if len(repos) == 1 {
-			verb = "fetches"
+		fix := "Switch it to SSH: " + r.fix
+		if r.fix == "" {
+			fix = "Switch it to SSH: git -C " + r.dir + " remote set-url <remote> git@<host>:<owner>/<repo>.git"
 		}
-		c.warn("Switch them to SSH, for example: git remote set-url origin git@github.com:<owner>/<repo>.git",
-			"%s in its folders %s over HTTPS, which doppel's keys don't cover: %s", Plural(len(repos), "repo"), verb, strings.Join(shown, ", "))
+		c.warn(fix, "%s fetches over HTTPS, which doppel's keys don't cover", r.dir)
 	}
 
 	if acc.GitHubUser == "" && c.GitHub.Any(acc.Hosts) {
@@ -374,10 +374,18 @@ func (c *checker) sharedAuthKey(acc *accounts.Account) (string, string) {
 	return "", ""
 }
 
-// httpsRepos finds repos in folders that fetch over HTTPS. It looks three
+// maxHTTPSRepos is how many HTTPS repos doctor names in each account's
+// folders before it only counts the rest.
+const maxHTTPSRepos = 5
+
+// httpsRepo is a repo with a remote over HTTPS, and the command that
+// switches its remotes to SSH ("" when doppel can't work it out).
+type httpsRepo struct{ dir, fix string }
+
+// httpsRepos finds repos in folders with a remote over HTTPS. It looks three
 // levels deep and skips hidden and dependency folders, so big trees stay quick.
-func httpsRepos(env *paths.Env, folders []string) []string {
-	var found []string
+func httpsRepos(env *paths.Env, folders []string) []httpsRepo {
+	var found []httpsRepo
 	for _, f := range folders {
 		visited := 0
 		var walk func(dir string, depth int)
@@ -387,8 +395,8 @@ func httpsRepos(env *paths.Env, folders []string) []string {
 			}
 			visited++
 			if paths.FileExists(filepath.Join(dir, ".git")) {
-				if out, err := git.Run(dir, "remote", "-v"); err == nil && (strings.Contains(out, "https://") || strings.Contains(out, "http://")) {
-					found = append(found, env.Shorten(dir))
+				if r, ok := httpsRemotes(env, dir); ok {
+					found = append(found, r)
 				}
 				return
 			}
@@ -406,6 +414,23 @@ func httpsRepos(env *paths.Env, folders []string) []string {
 		walk(strings.TrimSuffix(env.Expand(f), "/"), 0)
 	}
 	return found
+}
+
+// httpsRemotes checks a repo's remotes. ok is true when one uses HTTPS.
+func httpsRemotes(env *paths.Env, dir string) (repo httpsRepo, ok bool) {
+	repo.dir = env.Shorten(dir)
+	var fixes []string
+	for _, r := range hosts.Remotes(dir) {
+		if !hosts.IsHTTP(r.FetchURL) && !hosts.IsHTTP(r.PushURL) {
+			continue
+		}
+		ok = true
+		if fix := hosts.SwitchToSSH(r, repo.dir); fix != "" {
+			fixes = append(fixes, fix)
+		}
+	}
+	repo.fix = strings.Join(fixes, " && ")
+	return repo, ok
 }
 
 // Plural counts n of a word: "1 problem", "2 problems".

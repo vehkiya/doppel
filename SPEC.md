@@ -140,7 +140,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R6.1** Works in any folder, or on a path argument, and shows:
   - the account in effect, and the folder rule (or default) that selected it
   - the effective name, email, auth key and signing key, with whether signing is on
-  - the login check result for the repo's remote host
+  - the login check result for the repo's remote host. For an HTTPS remote, which the SSH keys don't cover, it gives the `git remote set-url` command that switches it to SSH instead.
 - **R6.2** It asks Git which account applies (each account file carries `doppel.account`), so the result always matches what Git will actually do. Where doppel has to match folders itself (R6.4, and to name the rule that applied), it uses the same ordered rules the index is generated from (`accounts.FolderRules` and `accounts.MatchFolder`), so the two can't disagree.
 - **R6.3** It warns when a value in effect doesn't come from doppel, for example a `--local` override or a global setting placed after doppel's include. It shows where each value comes from, using `git config --show-origin`.
 - **R6.4** Outside any repo, it shows which account a repo created there would get. Git can only answer this for an existing repo, so here doppel applies the same folder rules itself.
@@ -178,7 +178,9 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - doppel finds these by comparing `ssh -G -F ~/.ssh/config <host>` with a host that doesn't exist, so `Include`, `Match` and wildcards count as ssh counts them, and nothing connects.
 - **Keychain (macOS with Apple's `ssh`):** when the auth key has a passphrase, `~/.ssh/config` sets `UseKeychain yes` and `AddKeysToAgent yes` for each of the account's hosts. Without the first, macOS asks for the passphrase in the terminal; without the second, ssh doesn't load the key into the agent, so signing with it asks. *(warning)*
   - `AddKeysToAgent` comes from `ssh -G`. `ssh -G` doesn't print `UseKeychain`, so doppel reads that one setting from the file itself, as ssh would: the first value that applies wins, and `Host` blocks (with wildcards and `!`) and `Include` count. A `Match` block is taken to apply, so an unusual setup isn't reported as missing it.
-- **HTTPS remotes:** no repos in the account's folders fetch over HTTPS, which these keys don't cover. Reported only, never changed. *(warning)*
+- **HTTPS remotes:** no repos in the account's folders fetch or push over HTTPS, which these keys don't cover. Reported only, never changed. *(warning)*
+  - Each repo gets its own warning, up to five per account, then a count. The fix is the exact command, such as `git -C ~/projects/personal/configsh remote set-url origin git@github.com:vehkiya/configsh.git`, with `--push` for a push URL that's HTTPS on its own.
+  - The SSH URL is `git@<host>:<path>`, as GitHub, GitLab, Gitea and most hosts take it. A user name or token in the HTTPS URL is dropped, so it's never printed. A URL with a port gets a generic example instead, since the host's SSH port can't be told from it.
   - To stay quick on big trees, doppel looks three levels deep and skips hidden, `node_modules` and `vendor` folders.
 
 ### R8. Safety

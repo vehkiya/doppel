@@ -4,6 +4,7 @@
 package hosts
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -118,26 +119,130 @@ func (g *GitHub) Steps(host string, use Use, title, keyFile string) []string {
 	return steps
 }
 
-// RemoteURL returns the URL of the repo's origin remote, or of its first
-// remote when there's no origin. It's "" when the repo has no remote.
-func RemoteURL(repo string) string {
-	out, err := git.Run(repo, "remote")
+// Remote is one of a repo's remotes, with its URLs as Git uses them
+// (url.insteadOf applied).
+type Remote struct {
+	Name     string
+	FetchURL string
+	PushURL  string
+}
+
+// Remotes lists a repo's remotes, origin first, then the others in the
+// order Git lists them.
+func Remotes(repo string) []Remote {
+	out, err := git.Run(repo, "remote", "-v")
 	if err != nil {
-		return ""
+		return nil
 	}
-	remotes := strings.Fields(out)
-	if len(remotes) == 0 {
-		return ""
+	var list []Remote
+	find := func(name string) *Remote {
+		for i := range list {
+			if list[i].Name == name {
+				return &list[i]
+			}
+		}
+		list = append(list, Remote{Name: name})
+		return &list[len(list)-1]
 	}
-	name := remotes[0]
-	if slices.Contains(remotes, "origin") {
-		name = "origin"
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		r := find(fields[0])
+		switch fields[2] {
+		case "(fetch)":
+			r.FetchURL = fields[1]
+		case "(push)":
+			r.PushURL = fields[1]
+		}
 	}
-	url, err := git.Run(repo, "remote", "get-url", name)
-	if err != nil {
-		return ""
+	slices.SortStableFunc(list, func(a, b Remote) int {
+		switch {
+		case a.Name == b.Name:
+			return 0
+		case a.Name == "origin":
+			return -1
+		case b.Name == "origin":
+			return 1
+		}
+		return 0
+	})
+	return list
+}
+
+// MainRemote returns the repo's origin remote, or its first remote when
+// there's no origin. ok is false when the repo has no remote.
+func MainRemote(repo string) (r Remote, ok bool) {
+	list := Remotes(repo)
+	if len(list) == 0 {
+		return Remote{}, false
 	}
-	return strings.TrimSpace(url)
+	return list[0], true
+}
+
+// IsHTTP reports whether url is an HTTPS (or plain HTTP) remote, which SSH
+// keys don't cover.
+func IsHTTP(url string) bool {
+	return strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://")
+}
+
+// SSHURL returns the SSH form of an HTTPS remote, git@host:path, as GitHub,
+// GitLab, Gitea and most other hosts take it. Any user name or token in
+// the HTTPS URL is dropped. ok is false for a URL that isn't HTTPS, or that
+// names a port, since the host's SSH port can't be told from it.
+func SSHURL(url string) (ssh string, ok bool) {
+	rest, found := strings.CutPrefix(url, "https://")
+	if !found {
+		if rest, found = strings.CutPrefix(url, "http://"); !found {
+			return "", false
+		}
+	}
+	hostPart, path, _ := strings.Cut(rest, "/")
+	if at := strings.LastIndex(hostPart, "@"); at >= 0 {
+		hostPart = hostPart[at+1:]
+	}
+	path = strings.Trim(path, "/")
+	if hostPart == "" || path == "" || strings.ContainsAny(hostPart, ":[") || strings.ContainsAny(path, "?#") {
+		return "", false
+	}
+	return "git@" + hostPart + ":" + path, true
+}
+
+// SwitchToSSH returns the command that switches a remote's HTTPS URLs to
+// SSH, or "" when there's nothing it can switch. dir is the repo the
+// command runs in, as the user would type it; "" leaves out -C, for a
+// command run inside the repo.
+func SwitchToSSH(r Remote, dir string) string {
+	git := "git"
+	if dir != "" {
+		git += " -C " + shellArg(dir)
+	}
+	var commands []string
+	if ssh, ok := SSHURL(r.FetchURL); ok {
+		commands = append(commands, git+" remote set-url "+shellArg(r.Name)+" "+ssh)
+	}
+	if r.PushURL != r.FetchURL {
+		if ssh, ok := SSHURL(r.PushURL); ok {
+			commands = append(commands, git+" remote set-url --push "+shellArg(r.Name)+" "+ssh)
+		}
+	}
+	return strings.Join(commands, " && ")
+}
+
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./~@%+=:,-]+$`)
+
+// shellArg quotes s for a shell when it needs it. A leading "~/" stays
+// outside the quotes, so the shell still expands it.
+func shellArg(s string) string {
+	if shellSafe.MatchString(s) {
+		return s
+	}
+	prefix := ""
+	if rest, ok := strings.CutPrefix(s, "~/"); ok {
+		prefix, s = "~/", rest
+	}
+	return prefix + "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // SSHHost returns the host of an SSH remote URL (ssh://[user@]host[:port]/path

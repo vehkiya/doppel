@@ -114,10 +114,12 @@ func TestDoctorWarnings(t *testing.T) {
 		}, "~/.ssh/config also offers ~/.ssh/id_old for github.com", "2 warnings"}, // one per github.com account
 		{"a repo fetching over HTTPS", func(s *sandbox) {
 			repo := s.GitInit("projects/work/api")
-			if _, err := git.Run(repo, "remote", "add", "origin", "https://github.com/acme/api.git"); err != nil {
+			// A token in the URL never shows up in the fix.
+			if _, err := git.Run(repo, "remote", "add", "origin", "https://jane:ghp_secret@github.com/acme/api.git"); err != nil {
 				s.T.Fatal(err)
 			}
-		}, "1 repo in its folders fetches over HTTPS, which doppel's keys don't cover: ~/projects/work/api", "1 warning"},
+		}, "~/projects/work/api fetches over HTTPS, which doppel's keys don't cover\n" +
+			"    ↳ Switch it to SSH: git -C ~/projects/work/api remote set-url origin git@github.com:acme/api.git", "1 warning"},
 		{"doppel's files were edited by hand", func(s *sandbox) {
 			s.SetConfig(accountsDir+"work.gitconfig", accounts.KeySSHCommand, "ssh -i ~/.ssh/something-else")
 		}, "doppel's files don't match the accounts: ~/.config/doppel/accounts/work.gitconfig", "1 warning"},
@@ -127,6 +129,9 @@ func TestDoctorWarnings(t *testing.T) {
 			s := doctorSandbox(t)
 			c.setup(s)
 			out := s.mustRun("doctor") // warnings alone don't fail
+			if strings.Contains(out, "ghp_secret") {
+				t.Errorf("doctor printed a token:\n%s", out)
+			}
 			if !strings.Contains(out, c.want) || !strings.Contains(out, "0 problems, "+c.warnings+"\n") {
 				t.Errorf("doctor output is missing %q, or doesn't count %s:\n%s", c.want, c.warnings, out)
 			}

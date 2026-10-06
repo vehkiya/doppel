@@ -14,6 +14,7 @@ type Check struct {
 	OK      bool
 	Skipped bool // there was nothing to try, such as signing for an account that doesn't sign
 	Detail  string
+	Fix     string // a command that fixes what failed or was skipped, if there is one
 }
 
 // Test logs in to each of acc's hosts and signs a test message, verifying
