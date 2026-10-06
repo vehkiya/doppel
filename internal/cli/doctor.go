@@ -167,7 +167,7 @@ func (a *app) doctorFiles(r *report, list []*accounts.Account, fix bool) {
 		}
 	}
 
-	path, found, overriding, err := store.Overrides(a.env, identityKeys)
+	path, found, overriding, err := store.Overrides(a.env, accounts.IdentityKeys())
 	short := a.env.Shorten(path)
 	switch {
 	case err != nil:
@@ -219,13 +219,13 @@ func (a *app) doctorAccount(r *report, acc *accounts.Account, list []*accounts.A
 	switch {
 	case acc.SigningKey == "":
 		r.note("Doesn't sign")
-	case keys.PublicPath(acc.SigningKey) == keys.PublicPath(acc.AuthKey):
+	case acc.SigningKey.SameKey(acc.AuthKey):
 		r.ok("Signs %s with the auth key", signingScope(fmt.Sprint(acc.SignCommits), fmt.Sprint(acc.SignTags)))
 	default:
-		if _, err := keys.ReadPublic(a.env.Expand(acc.SigningKey)); err != nil {
-			r.problem("doppel edit "+acc.ID+" --signing-key <key>, or --no-signing", "Signing key %s: %v", acc.SigningKey, err)
+		if _, err := keys.ReadPublic(acc.SigningKey.Map(a.env.Expand)); err != nil {
+			r.problem("doppel edit "+acc.ID+" --signing-key <key>, or --no-signing", "Signing key %s: %v", acc.SigningKey.Display(), err)
 		} else {
-			a.doctorKey(r, "Signing key", strings.TrimSuffix(acc.SigningKey, ".pub"))
+			a.doctorKey(r, "Signing key", acc.SigningKey)
 		}
 	}
 
@@ -239,11 +239,11 @@ func (a *app) doctorAccount(r *report, acc *accounts.Account, list []*accounts.A
 	}
 
 	if cfg := filepath.Join(a.env.Home, ".ssh", "config"); paths.FileExists(cfg) {
-		own := keys.PublicPath(a.env.Expand(acc.AuthKey))
+		own := acc.AuthKey.Map(a.env.Expand)
 		for _, h := range acc.Hosts {
 			var extra []string
 			for _, f := range keys.HostIdentityFiles(cfg, h) {
-				if keys.PublicPath(a.env.Expand(f)) != own {
+				if !keys.Ref(f).Map(a.env.Expand).SameKey(own) {
 					extra = append(extra, a.env.Shorten(a.env.Expand(f)))
 				}
 			}
@@ -270,28 +270,28 @@ func (a *app) doctorAccount(r *report, acc *accounts.Account, list []*accounts.A
 }
 
 // doctorKey checks how a key is kept.
-func (a *app) doctorKey(r *report, label, key string) {
-	path := a.env.Expand(key)
+func (a *app) doctorKey(r *report, label string, key keys.Ref) {
+	path := key.Map(a.env.Expand)
 	loaded, running := keys.InAgent(path)
 	switch keys.CheckProtection(path) {
 	case keys.Unknown:
-		r.problem("Point the account at an existing key with `doppel edit`", "%s %s doesn't exist", label, key)
+		r.problem("Point the account at an existing key with `doppel edit`", "%s %s doesn't exist", label, key.Display())
 	case keys.Unencrypted:
-		r.warn("Add a passphrase: ssh-keygen -p -f "+key, "%s %s has no passphrase, so anyone who copies it can use it", label, key)
+		r.warn("Add a passphrase: ssh-keygen -p -f "+key.PrivatePath(), "%s %s has no passphrase, so anyone who copies it can use it", label, key.Display())
 	case keys.HardwareKey:
-		r.ok("%s %s is on a security key", label, key)
+		r.ok("%s %s is on a security key", label, key.Display())
 	case keys.AgentOnly:
 		if running && !loaded {
-			r.warn("Unlock it in your agent (1Password, Proton Pass, or ssh-add)", "%s %s lives in an agent, but the agent doesn't hold it right now", label, key)
+			r.warn("Unlock it in your agent (1Password, Proton Pass, or ssh-add)", "%s %s lives in an agent, but the agent doesn't hold it right now", label, key.Display())
 		} else {
-			r.ok("%s %s (private key in an agent)", label, key)
+			r.ok("%s %s (private key in an agent)", label, key.Display())
 		}
 	default:
 		status := "passphrase"
 		if loaded {
 			status += ", in agent"
 		}
-		r.ok("%s %s (%s)", label, key, status)
+		r.ok("%s %s (%s)", label, key.Display(), status)
 	}
 }
 
@@ -299,7 +299,7 @@ func (a *app) doctorKey(r *report, label, key string) {
 // auth key in the Keychain and loads the key into the agent, so neither
 // Git nor signing asks for it in the terminal.
 func (a *app) doctorKeychain(r *report, acc *accounts.Account) {
-	if !a.macKeychain() || keys.CheckProtection(a.env.Expand(acc.AuthKey)) != keys.Encrypted {
+	if !a.macKeychain() || keys.CheckProtection(acc.AuthKey.Map(a.env.Expand)) != keys.Encrypted {
 		return
 	}
 	cfg := filepath.Join(a.env.Home, ".ssh", "config")
@@ -351,7 +351,7 @@ func keylessNeighbours(acc *accounts.Account, list []*accounts.Account) ([]strin
 // sharedAuthKey finds an account after acc using the same auth key on a
 // shared host, so the pair is reported once.
 func (a *app) sharedAuthKey(acc *accounts.Account, list []*accounts.Account) (string, string) {
-	mine, err := keys.Fingerprint(a.env.Expand(acc.AuthKey))
+	mine, err := keys.Fingerprint(acc.AuthKey.Map(a.env.Expand))
 	if err != nil {
 		return "", ""
 	}
@@ -365,7 +365,7 @@ func (a *app) sharedAuthKey(acc *accounts.Account, list []*accounts.Account) (st
 			continue
 		}
 		host := sharedHost(acc, other)
-		if fp, err := keys.Fingerprint(a.env.Expand(other.AuthKey)); err == nil && host != "" && fp == mine {
+		if fp, err := keys.Fingerprint(other.AuthKey.Map(a.env.Expand)); err == nil && host != "" && fp == mine {
 			return other.ID, host
 		}
 	}

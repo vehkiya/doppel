@@ -1,14 +1,17 @@
 package accounts
 
 import (
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 )
 
 func TestSSHCommand(t *testing.T) {
-	cases := map[string]string{
+	cases := map[keys.Ref]string{
 		"":                    "ssh",
 		"~/.ssh/id_ed25519_w": "ssh -i ~/.ssh/id_ed25519_w -o IdentitiesOnly=yes",
 		"~/my keys/id":        "ssh -i '~/my keys/id' -o IdentitiesOnly=yes",
@@ -18,6 +21,39 @@ func TestSSHCommand(t *testing.T) {
 		if got := SSHCommand(key); got != want {
 			t.Errorf("sshCommand(%q) = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// Every field an account file holds comes back as it was saved: a managed
+// key whose value and read disagree would lose a setting on the next save.
+func TestManagedKeysRoundTrip(t *testing.T) {
+	acc := &Account{
+		ID: "work", Name: "Jane Doe", Email: "jane@acme.com", Hosts: []string{"github.com", "gitlab.com"},
+		GitHubUser: "jane-acme", Folders: []string{"~/work/", "~/clients/"}, Default: true,
+		AuthKey: "~/.ssh/id_work", SigningKey: "~/.ssh/id_work_signing.pub", SignCommits: true, SignTags: false,
+	}
+	values := map[string][]string{}
+	for _, s := range acc.Settings() {
+		values[strings.ToLower(s.Key)] = s.Values
+	}
+	if got := fromConfig("work", "", values); !reflect.DeepEqual(got, acc) {
+		t.Errorf("read back\n%+v\nwant\n%+v", got, acc)
+	}
+
+	var settings []string
+	for _, s := range acc.Settings() {
+		settings = append(settings, s.Key)
+	}
+	var managed []string
+	for _, k := range Managed {
+		managed = append(managed, k.Key)
+	}
+	if !slices.Equal(settings, managed) {
+		t.Errorf("Settings writes %v, want every managed key: %v", settings, managed)
+	}
+	want := []string{KeyName, KeyEmail, KeySigningKey, KeyGPGFormat, KeyCommitSign, KeyTagSign, KeySSHCommand}
+	if got := IdentityKeys(); !slices.Equal(got, want) {
+		t.Errorf("IdentityKeys = %v, want %v", got, want)
 	}
 }
 

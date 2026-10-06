@@ -44,13 +44,13 @@ func ParseGreeting(reply string) (user string, ok bool) {
 // Login runs `ssh -T git@host` with key (ssh's own keys when key is "") and
 // reads the greeting. batch stops ssh from asking anything (a passphrase,
 // whether to trust an unknown host), so it fails instead of waiting.
-func Login(host, key string, batch bool) LoginResult {
+func Login(host string, key Ref, batch bool) LoginResult {
 	args := []string{"-T", "-o", "ConnectTimeout=10"}
 	if batch {
 		args = append(args, "-o", "BatchMode=yes")
 	}
 	if key != "" {
-		args = append(args, "-i", key, "-o", "IdentitiesOnly=yes")
+		args = append(args, "-i", string(key), "-o", "IdentitiesOnly=yes")
 	}
 	args = append(args, "git@"+host)
 	// Hosts refuse a shell, so ssh exits with an error even when the key
@@ -94,17 +94,18 @@ func Login(host, key string, batch bool) LoginResult {
 
 // SignCheck signs a test message with key and verifies it against the
 // allowed_signers file for email, the way Git signs and verifies commits.
-func SignCheck(key, email, allowedSigners string) error {
+func SignCheck(key Ref, email, allowedSigners string) error {
 	dir, err := os.MkdirTemp("", "doppel-sign-")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	if literal, ok := strings.CutPrefix(key, LiteralPrefix); ok {
+	keyFile := string(key)
+	if literal, ok := key.Literal(); ok {
 		// A literal key can only sign through an agent; ssh-keygen needs it in a file.
-		key = filepath.Join(dir, "key.pub")
-		if err := os.WriteFile(key, []byte(literal+"\n"), 0600); err != nil {
+		keyFile = filepath.Join(dir, "key.pub")
+		if err := os.WriteFile(keyFile, []byte(literal+"\n"), 0600); err != nil {
 			return err
 		}
 	}
@@ -114,7 +115,7 @@ func SignCheck(key, email, allowedSigners string) error {
 	}
 
 	// Signing may ask for the key's passphrase, so it has no time limit.
-	sign := exec.Command("ssh-keygen", "-Y", "sign", "-n", "git", "-f", key, msg) //nolint:gosec // fixed binary; arguments built by doppel
+	sign := exec.Command("ssh-keygen", "-Y", "sign", "-n", "git", "-f", keyFile, msg) //nolint:gosec // fixed binary; arguments built by doppel
 	var stderr bytes.Buffer
 	sign.Stderr = &stderr
 	if err := sign.Run(); err != nil {

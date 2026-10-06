@@ -11,6 +11,7 @@ import (
 
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
+	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/plan"
 )
@@ -19,7 +20,7 @@ import (
 type Options struct {
 	// PublicKey reads a signing key's public half. It defaults to reading the
 	// key file; a dry run substitutes placeholders for keys it would generate.
-	PublicKey func(key string) (string, error)
+	PublicKey func(key keys.Ref) (string, error)
 
 	// Removed lists the accounts the command deletes. Save deletes the file
 	// of no other account, apart from the old file of one that was renamed,

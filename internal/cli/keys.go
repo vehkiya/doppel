@@ -107,7 +107,7 @@ func (a *app) applyKeyChanges(acc *accounts.Account, ch keyChanges) ([]pendingKe
 		if err != nil {
 			return nil, err
 		}
-		acc.AuthKey = a.env.Shorten(path)
+		acc.AuthKey = keys.Ref(a.env.Shorten(path))
 		pending = append(pending, pendingKey{path, acc.Email, "auth key"})
 	}
 
@@ -124,13 +124,13 @@ func (a *app) applyKeyChanges(acc *accounts.Account, ch keyChanges) ([]pendingKe
 		if err != nil {
 			return nil, err
 		}
-		acc.SigningKey = a.env.Shorten(path) + ".pub"
+		acc.SigningKey = keys.Ref(a.env.Shorten(path)).Public()
 		pending = append(pending, pendingKey{path, acc.Email, "signing key"})
 	case ch.signWithAuth:
 		if acc.AuthKey == "" {
 			return nil, errors.New("--sign-with-auth-key needs an auth key; add one with --auth-key or --generate-auth-key")
 		}
-		acc.SigningKey = keys.PublicPath(acc.AuthKey)
+		acc.SigningKey = acc.AuthKey.Public()
 	}
 	if acc.SigningKey != "" && !wasSigning {
 		acc.SignCommits, acc.SignTags = true, true
@@ -148,7 +148,7 @@ func (a *app) applyKeyChanges(acc *accounts.Account, ch keyChanges) ([]pendingKe
 // doppel never overwrites keys.
 func newKeyPath(sshDir, id string, signing bool, useFlag string) (string, error) {
 	path := keys.DefaultPath(sshDir, id, signing)
-	for _, p := range []string{path, path + ".pub"} {
+	for _, p := range []string{path, keys.Ref(path).PublicPath()} {
 		if _, err := os.Lstat(p); err == nil {
 			return "", fmt.Errorf("%s already exists; use it with %s %s", p, useFlag, path)
 		}
@@ -160,7 +160,7 @@ func newKeyPath(sshDir, id string, signing bool, useFlag string) (string, error)
 // form, "~/"-shortened. An auth key is a private key, or a .pub whose
 // private half lives in an agent. A signing key is stored as its .pub,
 // which Git hands to ssh-keygen. "" means no key.
-func (a *app) keyPath(input string, signing bool) (string, error) {
+func (a *app) keyPath(input string, signing bool) (keys.Ref, error) {
 	if input == "" {
 		return "", nil
 	}
@@ -168,22 +168,22 @@ func (a *app) keyPath(input string, signing bool) (string, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(a.cwd, path)
 	}
-	path = filepath.Clean(path)
+	key := keys.Ref(filepath.Clean(path))
 	if signing {
-		path = keys.PublicPath(path)
+		key = key.Public()
 	}
-	if strings.HasSuffix(path, ".pub") {
-		if _, err := keys.ReadPublic(path); err != nil {
+	if key.IsPublic() {
+		if _, err := keys.ReadPublic(key); err != nil {
 			if os.IsNotExist(err) && signing {
-				private := strings.TrimSuffix(path, ".pub")
-				return "", fmt.Errorf("no public key at %s; create it with: ssh-keygen -y -f %s > %s", a.env.Shorten(path), a.env.Shorten(private), a.env.Shorten(path))
+				return "", fmt.Errorf("no public key at %s; create it with: ssh-keygen -y -f %s > %s",
+					a.env.Shorten(key.PublicPath()), a.env.Shorten(key.PrivatePath()), a.env.Shorten(key.PublicPath()))
 			}
-			return "", fmt.Errorf("%s: %w", a.env.Shorten(path), err)
+			return "", fmt.Errorf("%s: %w", a.env.Shorten(key.PublicPath()), err)
 		}
-	} else if info, err := os.Stat(path); err != nil || info.IsDir() { //nolint:gosec // a key path the user gave
-		return "", fmt.Errorf("no key file at %s", a.env.Shorten(path))
+	} else if info, err := os.Stat(string(key)); err != nil || info.IsDir() {
+		return "", fmt.Errorf("no key file at %s", a.env.Shorten(string(key)))
 	}
-	return a.env.Shorten(path), nil
+	return key.Map(a.env.Shorten), nil
 }
 
 // generateKeys creates pending keys. ssh-keygen asks for each passphrase on
@@ -200,7 +200,7 @@ func (a *app) generateKeys(pending []pendingKey) error {
 		if err := a.generate(k.path, k.comment); err != nil {
 			return err
 		}
-		if keys.CheckProtection(k.path) == keys.Unencrypted {
+		if keys.CheckProtection(keys.Ref(k.path)) == keys.Unencrypted {
 			a.warnf("%s has no passphrase: anyone who copies it can use it. Add one with: ssh-keygen -p -f %s",
 				a.env.Shorten(k.path), a.env.Shorten(k.path))
 		}
@@ -210,10 +210,10 @@ func (a *app) generateKeys(pending []pendingKey) error {
 
 // dryRunKeys stands in for keys a dry run would generate, so the
 // allowed_signers diff can show where they'd go.
-func (a *app) dryRunKeys(pending []pendingKey) func(string) (string, error) {
-	return func(key string) (string, error) {
+func (a *app) dryRunKeys(pending []pendingKey) func(keys.Ref) (string, error) {
+	return func(key keys.Ref) (string, error) {
 		for _, k := range pending {
-			if key == k.path+".pub" {
+			if key.SameKey(keys.Ref(k.path)) {
 				return "ssh-ed25519 <the key generated at " + a.env.Shorten(k.path) + ">", nil
 			}
 		}
@@ -234,8 +234,8 @@ func (a *app) warnSharedKeys(list []*accounts.Account) {
 			if host == "" {
 				continue
 			}
-			fx, errX := keys.Fingerprint(a.env.Expand(x.AuthKey))
-			fy, errY := keys.Fingerprint(a.env.Expand(y.AuthKey))
+			fx, errX := keys.Fingerprint(x.AuthKey.Map(a.env.Expand))
+			fy, errY := keys.Fingerprint(y.AuthKey.Map(a.env.Expand))
 			if errX == nil && errY == nil && fx == fy {
 				a.warnf("%s and %s use the same auth key on %s. A host like GitHub lets a key belong to one account only, so one of them will log in as the other.", x.ID, y.ID, host)
 			}

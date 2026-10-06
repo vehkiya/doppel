@@ -170,8 +170,8 @@ func (a *app) keyInfo(list []*accounts.Account) map[string]tui.KeyInfo {
 		if acc.AuthKey != "" {
 			ki.Auth = a.keyWords(acc.AuthKey)
 		}
-		if acc.SigningKey != "" && keys.PublicPath(acc.SigningKey) != keys.PublicPath(acc.AuthKey) {
-			ki.Signing = a.keyWords(strings.TrimSuffix(acc.SigningKey, ".pub"))
+		if acc.SigningKey != "" && !acc.SigningKey.SameKey(acc.AuthKey) {
+			ki.Signing = a.keyWords(acc.SigningKey)
 		}
 		info[acc.ID] = ki
 	}
@@ -179,8 +179,8 @@ func (a *app) keyInfo(list []*accounts.Account) map[string]tui.KeyInfo {
 }
 
 // keyWords describes how a key is kept, such as ["passphrase", "in agent"].
-func (a *app) keyWords(key string) []string {
-	path := a.env.Expand(key)
+func (a *app) keyWords(key keys.Ref) []string {
+	path := key.Map(a.env.Expand)
 	words := []string{keys.CheckProtection(path).String()}
 	if loaded, running := keys.InAgent(path); running && loaded {
 		words = append(words, "in agent")

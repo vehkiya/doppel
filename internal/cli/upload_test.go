@@ -112,6 +112,26 @@ func TestUploadOnlyTheSigningKey(t *testing.T) {
 	}
 }
 
+// A signing key written inline in the account file, as a first account
+// started from the global config may have it, uploads like one in a file.
+func TestUploadAnInlineSigningKey(t *testing.T) {
+	s := githubSandbox(t)
+	s.Key("id_signing", "jane@acme.com", "")
+	pub := strings.Join(strings.Fields(s.Read(".ssh/id_signing.pub"))[:2], " ")
+	s.SetConfig(accountsDir+"work.gitconfig", "user.signingkey", "key::"+pub+" jane@acme.com")
+
+	out := s.mustRun("upload", "work", "--signing")
+	if !strings.Contains(out, "Added inline ssh-ed25519") || !strings.Contains(out, "to jane-acme's signing keys") {
+		t.Errorf("upload output:\n%s", out)
+	}
+	if got := strings.TrimSpace(s.Read("gh-keys-jane-acme-signing")); got != pub {
+		t.Errorf("GitHub's signing keys = %q, want the inline key %q", got, pub)
+	}
+	if out := s.mustRun("export", "work", "--signing", "--no-copy"); !strings.Contains(out, pub) {
+		t.Errorf("export doesn't show the inline key:\n%s", out)
+	}
+}
+
 func TestUploadWithMissingScopes(t *testing.T) {
 	s := githubSandbox(t)
 	s.Write("gh-scopes-jane-acme", "repo, read:org")

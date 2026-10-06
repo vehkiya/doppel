@@ -19,7 +19,7 @@ const exportUsage = "doppel export <id> [--auth | --signing] [--no-copy]"
 
 // exportedKey is one public key export shows, and what it's for.
 type exportedKey struct {
-	key           string // the key path, expanded
+	key           keys.Ref // expanded
 	auth, signing bool
 }
 
@@ -63,10 +63,10 @@ func (a *app) cmdExport(args []string) int {
 	for _, k := range exported {
 		line, err := keys.ReadPublicLine(k.key)
 		if err != nil {
-			return a.fail(fmt.Errorf("%s: %w", a.env.Shorten(keys.PublicPath(k.key)), err))
+			return a.fail(fmt.Errorf("%s: %w", a.publicName(k.key), err))
 		}
 		lines = append(lines, line)
-		a.printf("%s %s\n%s\n\n", ui.Label.Render(k.purpose()+" for "+acc.ID), ui.Dim.Render("("+a.env.Shorten(keys.PublicPath(k.key))+")"), line)
+		a.printf("%s %s\n%s\n\n", ui.Label.Render(k.purpose()+" for "+acc.ID), ui.Dim.Render("("+a.publicName(k.key)+")"), line)
 	}
 	switch {
 	case noCopy:
@@ -102,7 +102,7 @@ func keyTitle(acc *accounts.Account) string {
 // keysToExport picks the keys export shows. A key used for both logging in
 // and signing is shown once.
 func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([]exportedKey, error) {
-	auth, signing := a.env.Expand(acc.AuthKey), a.env.Expand(acc.SigningKey)
+	auth, signing := acc.AuthKey.Map(a.env.Expand), acc.SigningKey.Map(a.env.Expand)
 	switch {
 	case onlyAuth && auth == "":
 		return nil, fmt.Errorf("account %s has no auth key", acc.ID)
@@ -111,7 +111,7 @@ func (a *app) keysToExport(acc *accounts.Account, onlyAuth, onlySigning bool) ([
 	case auth == "" && signing == "":
 		return nil, fmt.Errorf("account %s has no keys yet; add one with `doppel edit %s --generate-auth-key --sign-with-auth-key`", acc.ID, acc.ID)
 	}
-	same := auth != "" && signing != "" && keys.PublicPath(auth) == keys.PublicPath(signing)
+	same := auth.SameKey(signing)
 	var out []exportedKey
 	if auth != "" && !onlySigning {
 		out = append(out, exportedKey{key: auth, auth: true, signing: same && !onlyAuth})
@@ -159,9 +159,16 @@ func (a *app) hostSteps(host string, k exportedKey, title string) []string {
 		"Add the key under SSH Keys, named " + title + ".",
 	}
 	if k.signing {
-		steps = append(steps, "For signed commits to show as verified, click Verify next to the key and sign the token shown: echo -n '<token>' | ssh-keygen -Y sign -n gitea -f "+keys.PublicPath(k.key))
+		file := cmpOr(k.key.Public().Map(a.env.Shorten).PublicPath(), "<the public key file>")
+		steps = append(steps, "For signed commits to show as verified, click Verify next to the key and sign the token shown: echo -n '<token>' | ssh-keygen -Y sign -n gitea -f "+file)
 	}
 	return steps
+}
+
+// publicName names a key's public half in messages: its .pub file,
+// "~/"-shortened, or an inline key.
+func (a *app) publicName(key keys.Ref) string {
+	return key.Public().Map(a.env.Shorten).Display()
 }
 
 // copyToClipboard puts text on the clipboard: through the terminal (OSC 52,

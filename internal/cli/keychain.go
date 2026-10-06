@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/vehkiya/doppel/internal/keys"
@@ -25,12 +24,11 @@ func (a *app) macKeychain() bool {
 // loadCommand is the command that loads key into the agent so nothing asks
 // for its passphrase. On a Mac it also keeps the passphrase in the Keychain,
 // so the key comes back after logging in again.
-func (a *app) loadCommand(key string) string {
-	key = strings.TrimSuffix(key, ".pub")
+func (a *app) loadCommand(key keys.Ref) string {
 	if a.macKeychain() {
-		return "ssh-add --apple-use-keychain " + key
+		return "ssh-add --apple-use-keychain " + key.PrivatePath()
 	}
-	return "ssh-add " + key
+	return "ssh-add " + key.PrivatePath()
 }
 
 // rememberPassphrases helps Git use newly generated keys without asking for
@@ -39,7 +37,7 @@ func (a *app) loadCommand(key string) string {
 func (a *app) rememberPassphrases(pending []pendingKey, assumeYes bool) {
 	var locked []string
 	for _, k := range pending {
-		if keys.CheckProtection(k.path) == keys.Encrypted {
+		if keys.CheckProtection(keys.Ref(k.path)) == keys.Encrypted {
 			locked = append(locked, a.env.Shorten(k.path))
 		}
 	}
@@ -61,11 +59,11 @@ func (a *app) rememberPassphrases(pending []pendingKey, assumeYes bool) {
 			keep = keep && err == nil
 		}
 		if !keep {
-			a.notef("To keep it later: %s", a.loadCommand(key))
+			a.notef("To keep it later: %s", a.loadCommand(keys.Ref(key)))
 			continue
 		}
 		if err := a.keychain(a.env.Expand(key)); err != nil {
-			a.warnf("Couldn't keep the passphrase in the Keychain (%v). Try again with: %s", err, a.loadCommand(key))
+			a.warnf("Couldn't keep the passphrase in the Keychain (%v). Try again with: %s", err, a.loadCommand(keys.Ref(key)))
 			continue
 		}
 		a.successf("The passphrase of %s is in your Keychain, and the key is in your agent", key)
@@ -76,23 +74,23 @@ func (a *app) rememberPassphrases(pending []pendingKey, assumeYes bool) {
 // keychainHints says how to stop macOS asking for passphrases in the
 // terminal: for each of keyPaths that has one and isn't in the agent, the
 // command that keeps it in the Keychain.
-func (a *app) keychainHints(keyPaths ...string) {
+func (a *app) keychainHints(refs ...keys.Ref) {
 	if !a.macKeychain() {
 		return
 	}
 	seen := map[string]bool{}
-	for _, key := range keyPaths {
-		key = strings.TrimSuffix(key, ".pub")
-		if key == "" || seen[key] {
+	for _, key := range refs {
+		private := key.PrivatePath()
+		if private == "" || seen[private] {
 			continue
 		}
-		seen[key] = true
-		path := a.env.Expand(key)
+		seen[private] = true
+		path := key.Map(a.env.Expand)
 		if keys.CheckProtection(path) != keys.Encrypted {
 			continue
 		}
 		if loaded, _ := keys.InAgent(path); !loaded {
-			a.notef("  %s isn't in your agent, so macOS asks for its passphrase. Keep it in the Keychain: %s", key, a.loadCommand(key))
+			a.notef("  %s isn't in your agent, so macOS asks for its passphrase. Keep it in the Keychain: %s", private, a.loadCommand(key))
 		}
 	}
 }

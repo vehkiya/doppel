@@ -19,7 +19,7 @@ Before committing, all of the following must pass cleanly:
 
 ### 2.0 Package layout
 * Code lives in packages under `internal/`; `main.go` only calls `cli.Run`. See SPEC.md §6.6 for what each package holds.
-* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves apart from two shared helpers: `atomicfile` (`plan`, `update`) and `proc` (`git`, `keys`, `github`, `cli`). `ui` only uses `plan.Change`. Nothing imports `cli`.
+* Dependencies point one way: `cli` → `store` → `accounts` → `paths`, `git`, `keys`. `store` and `cli` also use `keys`; `cli` also uses `github` and `update`. `cli` runs `tui`, which only reads accounts and returns an action: it never writes files or imports `store`. `plan`, `keys`, `github` and `update` are leaves apart from two shared helpers: `atomicfile` (`plan`, `update`) and `proc` (`git`, `keys`, `github`, `cli`). `ui` only uses `plan.Change`. Nothing imports `cli`.
 * Export only what another package needs. The end-to-end tests in `cli` count as another package: they use `store`'s include helpers to check the global config. A package's unit tests sit next to it; end-to-end tests that run doppel and then ask real git live in `cli`, one file per topic.
 
 ### 2.1 Dependencies
@@ -36,6 +36,8 @@ Before committing, all of the following must pass cleanly:
   * Use `git.Run` only where the user's config is the point, such as `whoami` and `rev-parse`.
 * **Validate every folder before it's written into a rule** (`paths.ValidateFolder`), including folders read back from hand-edited account files.
 * **Every account file sets every managed key** (`Account.Settings`), including "reset" values such as `commit.gpgsign = false` and `core.sshCommand = ssh`. Git applies the default account first and the folder account on top, so a key one account leaves out leaks in from another.
+  * The managed keys are listed once, in `accounts.Managed`: each key's value, whether it's read back from the file, and whether it's an identity setting (`IdentityKeys`, which `whoami`, `doctor` and the first-run import use). Add a managed key there and nowhere else.
+* **Key references are `keys.Ref`s.** An account names a key by its private path, by a `.pub` whose private half an agent holds, or (for signing) inline as `key::<public key>`. Ask the `Ref` (`PublicPath`, `PrivatePath`, `Public`, `IsLiteral`, `SameKey`) rather than looking at `.pub` or `key::` yourself, and expand `~/` with `ref.Map(env.Expand)`.
 * **Only managed keys are touched.** Settings a user adds to an account file, such as `pull.rebase`, must survive every command, including rename.
 * **The include stays last.**
   * doppel appends its include block to the end of the global file Git reads last, as text: `git config --add` would put it inside an existing `[include]` section.

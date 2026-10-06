@@ -8,15 +8,11 @@ import (
 
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
-	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
 const whoamiUsage = "doppel whoami [path] [--offline]"
-
-// Settings whoami checks come from the account in effect.
-var identityKeys = []string{accounts.KeyName, accounts.KeyEmail, accounts.KeySigningKey, accounts.KeyGPGFormat, accounts.KeyCommitSign, accounts.KeyTagSign, accounts.KeySSHCommand}
 
 func (a *app) cmdWhoami(args []string) int {
 	fs := newFlagSet("whoami")
@@ -97,7 +93,7 @@ func (a *app) whoamiInRepo(list []*accounts.Account, path, gitDir string, offlin
 	a.row("Email", value(accounts.KeyEmail))
 	switch ssh := value(accounts.KeySSHCommand); {
 	case acc != nil && acc.AuthKey != "" && ssh == accounts.SSHCommand(acc.AuthKey):
-		a.row("Auth key", acc.AuthKey+ui.Dim.Render(a.keyStatus(acc.AuthKey)))
+		a.row("Auth key", acc.AuthKey.Display()+ui.Dim.Render(" ("+strings.Join(a.keyWords(acc.AuthKey), ", ")+")"))
 	case ssh == "ssh" || ssh == "":
 		a.row("Auth key", "your default SSH keys")
 	default:
@@ -153,7 +149,7 @@ func (a *app) ruleFor(list []*accounts.Account, acc *accounts.Account, gitDir st
 // setting placed after doppel's include.
 func (a *app) warnOverrides(effective map[string]git.ConfigEntry) {
 	var lines []string
-	for _, key := range identityKeys {
+	for _, key := range accounts.IdentityKeys() {
 		e, ok := effective[strings.ToLower(key)]
 		if !ok || a.isAccountFile(e.Origin) {
 			continue
@@ -225,16 +221,6 @@ func signingScope(commits, tags string) string {
 		return "commits"
 	}
 	return "tags"
-}
-
-// keyStatus describes how a key is kept, such as " (passphrase, in agent)".
-func (a *app) keyStatus(key string) string {
-	path := a.env.Expand(key)
-	status := []string{keys.CheckProtection(path).String()}
-	if loaded, running := keys.InAgent(path); running && loaded {
-		status = append(status, "in agent")
-	}
-	return " (" + strings.Join(status, ", ") + ")"
 }
 
 // loginRow tries the account's key on the repo's remote host, without

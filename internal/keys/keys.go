@@ -12,28 +12,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/proc"
 )
 
-// LiteralPrefix marks a public key written inline instead of as a path, a
-// form user.signingkey accepts: "key::ssh-ed25519 AAAA…".
-const LiteralPrefix = "key::"
-
-// PublicPath returns the public half of a key path: the path itself when it
-// already ends in .pub, otherwise path + ".pub".
-func PublicPath(key string) string {
-	if strings.HasSuffix(key, ".pub") {
-		return key
-	}
-	return key + ".pub"
-}
-
 // ReadPublic returns the "<type> <base64>" part of a public key, read from
 // the key's .pub file or from a literal key. The comment is dropped.
-func ReadPublic(key string) (string, error) {
+func ReadPublic(key Ref) (string, error) {
 	line, err := ReadPublicLine(key)
 	if err != nil {
 		return "", err
@@ -43,11 +30,10 @@ func ReadPublic(key string) (string, error) {
 }
 
 // ReadPublicLine returns a public key as written, comment included.
-func ReadPublicLine(key string) (string, error) {
-	line, isLiteral := strings.CutPrefix(key, LiteralPrefix)
+func ReadPublicLine(key Ref) (string, error) {
+	line, isLiteral := key.Literal()
 	if !isLiteral {
-		path := PublicPath(key)
-		data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // a key path the user chose
+		data, err := os.ReadFile(filepath.Clean(key.PublicPath())) //nolint:gosec // a key path the user chose
 		if err != nil {
 			return "", err
 		}
@@ -56,10 +42,10 @@ func ReadPublicLine(key string) (string, error) {
 	line = strings.TrimSpace(line)
 	fields := strings.Fields(line)
 	if len(fields) < 2 || !isKeyType(fields[0]) {
-		return "", fmt.Errorf("%s doesn't hold an SSH public key", strings.TrimPrefix(key, LiteralPrefix))
+		return "", fmt.Errorf("%s doesn't hold an SSH public key", key.Display())
 	}
 	if _, err := base64.StdEncoding.DecodeString(fields[1]); err != nil {
-		return "", fmt.Errorf("%s doesn't hold an SSH public key", strings.TrimPrefix(key, LiteralPrefix))
+		return "", fmt.Errorf("%s doesn't hold an SSH public key", key.Display())
 	}
 	return line, nil
 }
@@ -69,7 +55,7 @@ func isKeyType(t string) bool {
 }
 
 // Fingerprint returns a key's SHA256 fingerprint as OpenSSH prints it.
-func Fingerprint(key string) (string, error) {
+func Fingerprint(key Ref) (string, error) {
 	pub, err := ReadPublic(key)
 	if err != nil {
 		return "", err
@@ -107,22 +93,25 @@ func (p Protection) String() string {
 	return "unknown"
 }
 
-// CheckProtection reports how the private key behind key is kept.
-func CheckProtection(key string) Protection {
-	if strings.HasPrefix(key, LiteralPrefix) || strings.HasSuffix(key, ".pub") {
+// CheckProtection reports how the private key behind key is kept, whichever
+// half key names: a signing key named by its .pub is checked through the
+// private key next to it. A literal, or a .pub with no private key beside
+// it, lives in an agent.
+func CheckProtection(key Ref) Protection {
+	if key.IsLiteral() {
 		return AgentOnly
 	}
 	if pub, err := ReadPublic(key); err == nil && strings.HasPrefix(pub, "sk-") {
 		return HardwareKey
 	}
-	if _, err := os.Stat(key); err != nil {
-		if _, err := os.Stat(PublicPath(key)); err == nil {
+	if _, err := os.Stat(key.PrivatePath()); err != nil {
+		if _, err := os.Stat(key.PublicPath()); err == nil {
 			return AgentOnly
 		}
 		return Unknown
 	}
 	// Loading the key with an empty passphrase only works when it has none.
-	cmd, finish := proc.Command(proc.Local, "ssh-keygen", "-y", "-P", "", "-f", key)
+	cmd, finish := proc.Command(proc.Local, "ssh-keygen", "-y", "-P", "", "-f", key.PrivatePath())
 	if err := finish(cmd.Run()); err != nil {
 		return Encrypted
 	}
@@ -131,7 +120,7 @@ func CheckProtection(key string) Protection {
 
 // InAgent reports whether ssh-agent holds key. running is false when there's
 // no agent to ask.
-func InAgent(key string) (loaded, running bool) {
+func InAgent(key Ref) (loaded, running bool) {
 	fp, err := Fingerprint(key)
 	if err != nil {
 		return false, false
@@ -187,12 +176,12 @@ func Generate(path, comment string, passphrase *string, stdin io.Reader, stdout,
 // Discover lists the keys in sshDir an account could use, sorted: private
 // keys, and public keys whose private half isn't on disk because an agent
 // holds it.
-func Discover(sshDir string) []string {
+func Discover(sshDir string) []Ref {
 	entries, err := os.ReadDir(sshDir)
 	if err != nil {
 		return nil
 	}
-	var found []string
+	var found []Ref
 	for _, entry := range entries {
 		name := entry.Name()
 		path := filepath.Join(sshDir, name)
@@ -206,16 +195,16 @@ func Discover(sshDir string) []string {
 			if _, err := os.Stat(strings.TrimSuffix(path, ".pub")); err == nil {
 				continue // listed through its private key
 			}
-			if _, err := ReadPublic(path); err == nil {
-				found = append(found, path)
+			if _, err := ReadPublic(Ref(path)); err == nil {
+				found = append(found, Ref(path))
 			}
 			continue
 		}
 		if isPrivateKey(path) {
-			found = append(found, path)
+			found = append(found, Ref(path))
 		}
 	}
-	sort.Strings(found)
+	slices.Sort(found)
 	return found
 }
 

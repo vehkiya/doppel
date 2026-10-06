@@ -151,11 +151,12 @@ func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exporte
 	}
 	existing := map[github.Kind][]string{}
 	for _, k := range exported {
-		pub, err := keys.ReadPublic(k.key)
+		line, err := keys.ReadPublicLine(k.key)
 		if err != nil {
-			return a.fail(fmt.Errorf("%s: %w", a.env.Shorten(keys.PublicPath(k.key)), err)), false
+			return a.fail(fmt.Errorf("%s: %w", a.publicName(k.key), err)), false
 		}
-		short := a.env.Shorten(keys.PublicPath(k.key))
+		pub, _ := keys.ReadPublic(k.key)
+		short := a.publicName(k.key)
 		for _, kind := range kindsOf(k) {
 			if _, ok := existing[kind]; !ok {
 				if existing[kind], err = client.Keys(kind); err != nil {
@@ -166,7 +167,7 @@ func (a *app) uploadTo(apiHost string, acc *accounts.Account, exported []exporte
 				a.successf("%s is already one of %s's %s keys", short, where, kind)
 				continue
 			}
-			if err := client.Add(kind, keys.PublicPath(k.key), title); err != nil {
+			if err := client.Add(kind, line, title); err != nil {
 				return a.fail(err), false
 			}
 			a.successf("Added %s to %s's %s keys", short, where, kind)

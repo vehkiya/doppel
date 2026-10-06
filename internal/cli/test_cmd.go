@@ -59,7 +59,7 @@ func (a *app) cmdTest(args []string) int {
 		} else if reason := a.needsPassphrase(acc.SigningKey, !a.interactive); reason != "" {
 			a.checkRow(false, "signing", reason)
 			failed = true
-		} else if err := keys.SignCheck(a.env.Expand(acc.SigningKey), acc.Email, signers); err != nil {
+		} else if err := keys.SignCheck(acc.SigningKey.Map(a.env.Expand), acc.Email, signers); err != nil {
 			a.checkRow(false, "signing", err.Error())
 			failed = true
 		} else {
@@ -82,7 +82,7 @@ func (a *app) checkLogin(acc *accounts.Account, host string, batch bool) (bool, 
 	if reason := a.needsPassphrase(acc.AuthKey, batch); reason != "" {
 		return false, reason
 	}
-	res := keys.Login(host, a.env.Expand(acc.AuthKey), batch)
+	res := keys.Login(host, acc.AuthKey.Map(a.env.Expand), batch)
 	switch {
 	case !res.Accepted:
 		return false, res.Problem
@@ -96,13 +96,12 @@ func (a *app) checkLogin(acc *accounts.Account, host string, batch bool) (bool, 
 // for its passphrase (batch): it has one, and ssh-agent doesn't hold it.
 // It returns "" when the key can be used. key may be a private key or the
 // .pub next to one, as signing keys are stored.
-func (a *app) needsPassphrase(key string, batch bool) string {
+func (a *app) needsPassphrase(key keys.Ref, batch bool) string {
 	if key == "" || !batch {
 		return ""
 	}
-	path := a.env.Expand(key)
-	private := strings.TrimSuffix(path, ".pub")
-	if keys.CheckProtection(private) != keys.Encrypted {
+	path := key.Map(a.env.Expand)
+	if keys.CheckProtection(path) != keys.Encrypted {
 		return ""
 	}
 	if loaded, _ := keys.InAgent(path); loaded {

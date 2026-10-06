@@ -366,15 +366,15 @@ func (ans *answers) accountID(acc *accounts.Account) string {
 
 // authOptions lists the auth key choices: keep the current key, generate
 // one, a key found in ~/.ssh, another file, or none.
-func (a *app) authOptions(acc *accounts.Account, discovered []string) []huh.Option[string] {
+func (a *app) authOptions(acc *accounts.Account, discovered []keys.Ref) []huh.Option[string] {
 	var options []huh.Option[string]
 	if acc.AuthKey != "" {
-		options = append(options, huh.NewOption("Keep "+acc.AuthKey, keyKeep))
+		options = append(options, huh.NewOption("Keep "+acc.AuthKey.Display(), keyKeep))
 	}
 	options = append(options, huh.NewOption("Generate a new key", keyGenerate))
 	for _, k := range discovered {
-		if a.env.Shorten(k) != acc.AuthKey {
-			options = append(options, huh.NewOption(keyLabel(a.env.Shorten(k)), k))
+		if short := k.Map(a.env.Shorten); short != acc.AuthKey {
+			options = append(options, huh.NewOption(keyLabel(short), string(k)))
 		}
 	}
 	return append(options,
@@ -385,17 +385,17 @@ func (a *app) authOptions(acc *accounts.Account, discovered []string) []huh.Opti
 // signingOptions lists the signing choices: keep the current key, sign with
 // the auth key, generate a separate key, a key found in ~/.ssh, another
 // file, or don't sign.
-func (a *app) signingOptions(acc *accounts.Account, discovered []string) []huh.Option[string] {
+func (a *app) signingOptions(acc *accounts.Account, discovered []keys.Ref) []huh.Option[string] {
 	var options []huh.Option[string]
 	if acc.SigningKey != "" {
-		options = append(options, huh.NewOption("Keep "+acc.SigningKey, keyKeep))
+		options = append(options, huh.NewOption("Keep "+acc.SigningKey.Display(), keyKeep))
 	}
 	options = append(options,
 		huh.NewOption("Sign with the auth key", keyWithAuth),
 		huh.NewOption("Generate a separate signing key", keyGenerate))
 	for _, k := range discovered {
-		if a.env.Shorten(keys.PublicPath(k)) != acc.SigningKey {
-			options = append(options, huh.NewOption(keyLabel(a.env.Shorten(k)), k))
+		if short := k.Map(a.env.Shorten); short.Public() != acc.SigningKey {
+			options = append(options, huh.NewOption(keyLabel(short), string(k)))
 		}
 	}
 	return append(options,
@@ -560,8 +560,8 @@ func (a *app) review(ans *answers, acc *accounts.Account) string {
 		}
 		return a.env.Shorten(choice)
 	}
-	auth := cmpOr(describe(ans.Auth, ans.AuthPath, acc.AuthKey, false), "ssh's own keys")
-	signing := describe(ans.Signing, ans.SigningPath, acc.SigningKey, true)
+	auth := cmpOr(describe(ans.Auth, ans.AuthPath, acc.AuthKey.Display(), false), "ssh's own keys")
+	signing := describe(ans.Signing, ans.SigningPath, acc.SigningKey.Display(), true)
 	switch {
 	case ans.Signing == keyWithAuth:
 		signing = "with the auth key"
@@ -625,11 +625,11 @@ func cmpOr(values ...string) string {
 }
 
 // keyLabel names a discovered key in a list, noting agent-held ones.
-func keyLabel(path string) string {
-	if strings.HasSuffix(path, ".pub") {
-		return path + " (private key in an agent)"
+func keyLabel(key keys.Ref) string {
+	if key.IsPublic() {
+		return key.Display() + " (private key in an agent)"
 	}
-	return path
+	return key.Display()
 }
 
 // splitList splits a comma-separated answer.

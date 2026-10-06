@@ -103,6 +103,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 - **R4.1** Choice: none, the same key as the auth key, or a separate key (existing, custom path, or generated as `~/.ssh/id_ed25519_<account>_signing`).
 - **R4.2** Sets `gpg.format = ssh`, `user.signingkey = <key>.pub`, `commit.gpgsign` and `tag.gpgsign`. With no signing key, both `gpgsign` settings are explicitly `false`.
+  - The signing key may also be written inline, `user.signingkey = key::ssh-ed25519 AAAA…`, as Git allows: R1.5 brings one in as it is, and a hand edit is kept. Its private half then lives in an agent. `allowed_signers`, `test`, `export` and `upload` use it like a key in a file.
 - **R4.3** `allowed_signers` has one entry per account (`<email> namespaces="git" <public key>`), kept inside a marked block that doppel owns. Entries outside the block, such as teammates' keys, are never touched. Changing an account's email or signing key updates its entry.
 - **R4.4** Uses the file in `gpg.ssh.allowedSignersFile` if the user set one in the global config, or in a file it includes (`[include]`, not `[includeIf]`). Otherwise it uses `~/.ssh/allowed_signers` and sets that option in the generated index.
   - doppel follows the includes itself, letting Git parse each file, so it can skip its own: the value the index sets isn't mistaken for the user's, and a damaged index can't stop doppel from rewriting it.
@@ -111,7 +112,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 ### R5. Getting keys onto hosts
 
-- **R5.1 `upload` (GitHub):** `gh ssh-key add --type authentication|signing --title "doppel: <account> (<hostname>)"`, on every GitHub host the account uses.
+- **R5.1 `upload` (GitHub):** `gh ssh-key add - --type authentication|signing --title "doppel: <account> (<hostname>)"`, on every GitHub host the account uses. The public key goes to gh on stdin, so an inline key (R4.2) uploads like one in a file.
   - **Which hosts are GitHub:**
     - `github.com`, which GitHub Enterprise Cloud (including Enterprise Managed Users) shares
     - its port-443 SSH endpoint `ssh.github.com`
@@ -326,6 +327,7 @@ Every account file sets every setting doppel manages, including a "reset" value 
 - Git ignores the `[doppel]` section. Only the single-valued `doppel.account` is read through Git (R6.2).
 - **What doppel reads back vs. derives:**
   - Settings with a one-to-one Git equivalent are read back from the file, so hand edits to them stick: `user.name`, `user.email`, `user.signingkey` (the signing key's `.pub`), `commit.gpgsign`, `tag.gpgsign`.
+  - One list in the code (`accounts.Managed`) names every managed key: its value, whether it's read back, and whether it's an identity setting (the ones R1.5, R6.3 and R7 look at). Adding a managed key means adding it there.
   - `core.sshCommand` combines several values, so it is always regenerated from `doppel.authKey`, and hand edits to it are overwritten.
   - doppel's own fields live under `[doppel]`.
 - **Other settings are kept.** Settings doppel doesn't manage, such as a per-account `pull.rebase`, are never touched, so an account file can carry any extra Git settings for that account.
