@@ -36,7 +36,7 @@ Login     ✓ github.com: logged in as jane-acme
   * doppel keeps a marked block in your `allowed_signers` file, so `git log --show-signature` shows a good signature. Other entries in that file, such as teammates' keys, are left alone.
 * **Keys handled for you:**
   * Pick an existing key, or generate one (`ssh-keygen` asks for the passphrase).
-  * Keys held by an agent work too: 1Password, Proton Pass, or a key you load from Vault/OpenBao with `ssh-add`.
+  * Keys held by an agent work too: 1Password, Bitwarden, gpg-agent, or a key you load from Vault/OpenBao with `ssh-add`. See [Using a different SSH agent](#-using-a-different-ssh-agent).
 * **GitHub uploads:**
   * `doppel upload` adds the keys to the account's GitHub user through `gh`, without switching `gh`'s active account.
   * Works with github.com (including GitHub Enterprise Cloud), GHE.com, and GitHub Enterprise Server.
@@ -173,18 +173,59 @@ The index uses Git's own [`includeIf "gitdir:…"`](https://git-scm.com/docs/git
 
 ---
 
-## 🔑 Keys held by an agent
+## 🔑 Using a different SSH agent
 
-An auth key can be just a `.pub` file whose private half lives in an agent:
+doppel never talks to an agent itself. Two programs do, and both use the agent that `SSH_AUTH_SOCK` points at:
+- **ssh,** when Git fetches and pushes with an account's `core.sshCommand` (`ssh -i <key> -o IdentitiesOnly=yes`)
+- **`ssh-keygen -Y sign`,** when Git signs a commit
 
-* **1Password, Proton Pass:** export the public key into `~/.ssh`, and point `SSH_AUTH_SOCK` at the app's agent, or let the app load keys into your usual agent.
-* **Vault / OpenBao:** neither runs an agent, so keep the public key in `~/.ssh` and load the private key into your agent yourself:
+So to keep keys in another agent, such as 1Password, Proton Pass, Bitwarden or gpg-agent, point `SSH_AUTH_SOCK` at it and give each account the key's public half. Nothing else in doppel changes.
+
+### 1. Point `SSH_AUTH_SOCK` at the agent
+
+Set it in your shell profile, so Git, `ssh-keygen` and doppel's checks all use the same agent:
+
+```bash
+export SSH_AUTH_SOCK="$HOME/.1password/agent.sock"    # 1Password on Linux
+```
+
+| Agent | `SSH_AUTH_SOCK` |
+| :--- | :--- |
+| 1Password (macOS) | `$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock` |
+| 1Password (Linux) | `$HOME/.1password/agent.sock` |
+| Bitwarden (Linux, macOS `.dmg`) | `$HOME/.bitwarden-ssh-agent.sock` (Snap and the Mac App Store build keep it in their own folder; see Bitwarden's docs) |
+| gpg-agent (`enable-ssh-support`) | `$(gpgconf --list-dirs agent-ssh-socket)` |
+
+Paths can change between app versions, so check the app's own docs. With the right path, `ssh-add -L` lists the agent's keys.
+
+**Why not `IdentityAgent`?** `IdentityAgent` in `~/.ssh/config` only works for fetching and pushing, because ssh is the only program that reads that file. Git signs with `ssh-keygen`, and doppel checks keys with `ssh-add`, and both only look at `SSH_AUTH_SOCK`. With the agent set only in `IdentityAgent`, pushes work but signing fails, and `doppel doctor` says the key isn't loaded.
+
+### 2. Give the account the public key
+
+The agent keeps the private key. doppel needs the public half as a file, usually in `~/.ssh`:
+
+```bash
+ssh-add -L                                                    # every key the agent holds
+ssh-add -L | grep 'Work key' > ~/.ssh/id_ed25519_work.pub     # pick one by its comment
+doppel edit work --auth-key ~/.ssh/id_ed25519_work.pub --sign-with-auth-key
+```
+
+The wizard offers `.pub` files in `~/.ssh` too. Most apps can also copy the public key for you; in 1Password, it's the key item's public key field.
+
+### 3. Check it
+
+`doppel test work` logs in and signs through the agent. `doppel whoami` marks a key the agent holds with "in agent", and `doppel doctor` warns when the agent doesn't hold it right now, for example while the app is locked.
+
+### Good to know
+
+- **One agent for every account.** `SSH_AUTH_SOCK` names a single agent, so keep all your agent-held keys in it. Keys on disk still work alongside it, but some agents don't accept keys from `ssh-add` (1Password's doesn't). A passphrase-protected key on disk then can't be cached, so Git keeps asking for its passphrase: move it into the agent too.
+- **An agent full of keys is fine.** `IdentitiesOnly=yes` makes ssh offer only the account's own key. GitHub can't log you in as the wrong user, and servers don't stop with "Too many authentication failures".
+- **Secret stores without an agent,** such as Vault, OpenBao or KeePassXC, load keys into the agent you already use. There's nothing to point; keep the public key in `~/.ssh` and load the private key yourself:
   ```bash
   bao kv get -field=private_key secret/ssh/work | ssh-add -t 8h -
   doppel edit work --auth-key ~/.ssh/id_ed25519_work.pub --sign-with-auth-key
   ```
-
-`doppel whoami` and `doppel doctor` say when such a key isn't loaded right now.
+- **macOS Keychain:** doppel offers to keep a passphrase in the Keychain only for keys on disk. A key that lives in an agent doesn't need it.
 
 ---
 
