@@ -14,6 +14,10 @@ import (
 func doctorSandbox(t *testing.T) *sandbox {
 	t.Helper()
 	s := newSandbox(t)
+	// These tests count warnings. On a Mac, keys with a passphrase would add
+	// the Keychain checks, which depend on the machine's ssh; those have
+	// their own tests.
+	s.goos = "linux"
 	s.Key("id_personal", "jane@personal.dev", "a passphrase")
 	s.Key("id_work", "jane@acme.com", "a passphrase")
 	s.Mkdir("projects/work")

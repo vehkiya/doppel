@@ -76,8 +76,8 @@ func (a *app) saveRemoving(removed, list []*accounts.Account, w writeFlags, done
 		return a.fail(err)
 	}
 	code := a.finish(p, w, done)
-	if code == 0 && !w.dryRun && len(pending) > 0 {
-		a.notef("Load new keys into your agent so Git doesn't ask for the passphrase on every commit: ssh-add <key>")
+	if code == 0 && !w.dryRun {
+		a.rememberPassphrases(pending, w.assumeYes())
 	}
 	return code
 }

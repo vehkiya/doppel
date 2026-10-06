@@ -22,6 +22,10 @@ type sandbox struct {
 	stdout bytes.Buffer
 	stderr bytes.Buffer
 	copied []string // what the commands put on the clipboard
+
+	goos       string   // the system the next command thinks it runs on; "" for the real one
+	passphrase string   // the passphrase generated keys get
+	keychained []string // the keys whose passphrases went to the macOS Keychain
 }
 
 func newSandbox(t *testing.T) *sandbox {
@@ -47,18 +51,27 @@ func (s *sandbox) newApp(cwd string) *app {
 	s.T.Helper()
 	s.stdout.Reset()
 	s.stderr.Reset()
+	env := s.Env()
+	if s.goos != "" {
+		env.GOOS = s.goos
+	}
 	return &app{
-		env:         s.Env(),
+		env:         env,
 		cwd:         cwd,
 		stdin:       bufio.NewReader(strings.NewReader(s.stdin)),
 		stdout:      ui.Writer(&s.stdout),
 		stderr:      ui.Writer(&s.stderr),
 		interactive: s.tty,
 		accessible:  true,
-		// Generated keys get an empty passphrase, as there's nobody to type one.
+		// Generated keys get s.passphrase, empty unless a test sets one, as
+		// there's nobody to type one.
 		generate: func(path, comment string) error {
-			empty := ""
-			return keys.Generate(path, comment, &empty, nil, io.Discard, io.Discard)
+			passphrase := s.passphrase
+			return keys.Generate(path, comment, &passphrase, nil, io.Discard, io.Discard)
+		},
+		keychain: func(path string) error {
+			s.keychained = append(s.keychained, path)
+			return nil
 		},
 		copy: func(text string) error {
 			s.copied = append(s.copied, text)
