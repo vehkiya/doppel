@@ -10,12 +10,43 @@ import (
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
-const whoamiUsage = "doppel whoami [path] [--offline]"
+const whoamiUsage = "doppel whoami [path] [--offline] [--json]"
+
+// whoamiJSON is the machine-readable representation of identity for `doppel whoami --json`.
+type whoamiJSON struct {
+	InRepo         bool             `json:"in_repo"`
+	Repo           string           `json:"repo"`
+	Path           string           `json:"path"`
+	Exists         bool             `json:"exists"`
+	Account        string           `json:"account"`
+	Rule           string           `json:"rule"`
+	Name           string           `json:"name"`
+	Email          string           `json:"email"`
+	AuthKey        string           `json:"auth_key"`
+	SSHCommand     string           `json:"ssh_command"`
+	SigningKey     string           `json:"signing_key"`
+	SignCommits    bool             `json:"sign_commits"`
+	SignTags       bool             `json:"sign_tags"`
+	Overrides      []string         `json:"overrides"`
+	NewRepoAccount string           `json:"new_repo_account"`
+	NewRepoRule    string           `json:"new_repo_rule"`
+	Login          *whoamiLoginJSON `json:"login"`
+}
+
+type whoamiLoginJSON struct {
+	OK      bool   `json:"ok"`
+	Skipped bool   `json:"skipped"`
+	Label   string `json:"label"`
+	Detail  string `json:"detail"`
+	Fix     string `json:"fix"`
+}
 
 func (a *app) cmdWhoami(args []string) int {
 	fs := newFlagSet("whoami")
 	var offline bool
+	var asJSON bool
 	fs.BoolVar(&offline, "offline", false, "don't try logging in to the repo's host")
+	fs.BoolVar(&asJSON, "json", false, "output identity as JSON")
 	positional, code, ok := a.parseCommand(fs, args, whoamiUsage)
 	if !ok {
 		return code
@@ -38,6 +69,48 @@ func (a *app) cmdWhoami(args []string) int {
 	id, err := ops.Whoami(ctx, list, path)
 	if err != nil {
 		return a.fail(err)
+	}
+
+	if asJSON {
+		var loginJSON *whoamiLoginJSON
+		if id.Account != nil && !offline {
+			if login, ok := ops.RemoteLogin(ctx, id.Account, id.Path); ok {
+				loginJSON = &whoamiLoginJSON{
+					OK:      login.OK,
+					Skipped: login.Skipped,
+					Label:   login.Label,
+					Detail:  login.Detail,
+					Fix:     login.Fix,
+				}
+			}
+		}
+		overrides := id.Overrides
+		if overrides == nil {
+			overrides = []string{}
+		}
+		var authKey string
+		if id.UsesAccountKey && id.Account != nil {
+			authKey = id.Account.AuthKey.String()
+		}
+		return a.printJSON(whoamiJSON{
+			InRepo:         id.InRepo,
+			Repo:           id.Repo,
+			Path:           id.Path,
+			Exists:         id.Exists,
+			Account:        id.AccountID,
+			Rule:           id.Rule,
+			Name:           id.Name,
+			Email:          id.Email,
+			AuthKey:        authKey,
+			SSHCommand:     id.SSHCommand,
+			SigningKey:     id.SigningKey,
+			SignCommits:    id.SignCommits,
+			SignTags:       id.SignTags,
+			Overrides:      overrides,
+			NewRepoAccount: id.NewRepoID,
+			NewRepoRule:    id.NewRepoRule,
+			Login:          loginJSON,
+		})
 	}
 	if !id.InRepo {
 		note := " (not a Git repository)"

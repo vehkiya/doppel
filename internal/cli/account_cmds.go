@@ -11,15 +11,64 @@ import (
 	"github.com/vehkiya/doppel/internal/ui"
 )
 
-const lsUsage = "doppel ls"
+const lsUsage = "doppel ls [--json]"
+
+// accountJSON is the machine-readable representation of an account for `doppel ls --json`.
+type accountJSON struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Email       string   `json:"email"`
+	Default     bool     `json:"default"`
+	Hosts       []string `json:"hosts"`
+	GitHubUser  string   `json:"github_user"`
+	Folders     []string `json:"folders"`
+	AuthKey     string   `json:"auth_key"`
+	SigningKey  string   `json:"signing_key"`
+	SignCommits bool     `json:"sign_commits"`
+	SignTags    bool     `json:"sign_tags"`
+}
 
 func (a *app) cmdLs(args []string) int {
-	if _, code, ok := a.parseCommand(newFlagSet("ls"), args, lsUsage); !ok {
+	fs := newFlagSet("ls")
+	var asJSON bool
+	fs.BoolVar(&asJSON, "json", false, "output accounts as JSON")
+	positional, code, ok := a.parseCommand(fs, args, lsUsage)
+	if !ok {
 		return code
+	}
+	if len(positional) != 0 {
+		return a.usageError(lsUsage)
 	}
 	list, err := accounts.Load(a.env)
 	if err != nil {
 		return a.fail(err)
+	}
+	if asJSON {
+		out := make([]accountJSON, len(list))
+		for i, acc := range list {
+			hosts := acc.Hosts
+			if hosts == nil {
+				hosts = []string{}
+			}
+			folders := acc.Folders
+			if folders == nil {
+				folders = []string{}
+			}
+			out[i] = accountJSON{
+				ID:          acc.ID,
+				Name:        acc.Name,
+				Email:       acc.Email,
+				Default:     acc.Default,
+				Hosts:       hosts,
+				GitHubUser:  acc.GitHubUser,
+				Folders:     folders,
+				AuthKey:     acc.AuthKey.String(),
+				SigningKey:  acc.SigningKey.String(),
+				SignCommits: acc.SignCommits,
+				SignTags:    acc.SignTags,
+			}
+		}
+		return a.printJSON(out)
 	}
 	if len(list) == 0 {
 		a.printf("No accounts yet. Add one with `doppel add`, which asks for each setting, or for scripts:\n  doppel add <id> --name \"Your Name\" --email you@example.com\n")

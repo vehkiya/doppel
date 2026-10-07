@@ -131,8 +131,8 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 
 | Command | What it does |
 | :--- | :--- |
-| `doppel` | Opens the account browser in a terminal; otherwise lists accounts |
-| `doppel ls` | Lists accounts, their keys and folders |
+| `doppel` | Opens the account browser in a terminal (unless ACCESSIBLE is set); otherwise lists accounts |
+| `doppel ls [--json]` | Lists accounts, their keys and folders |
 | `doppel add [<id>]` | Adds an account, with a wizard or with flags |
 | `doppel edit <id>` | Changes an account, with a wizard or with flags (`--host` and `--folder` replace the list) |
 | `doppel rm <id>` | Deletes an account; key files are kept |
@@ -140,7 +140,7 @@ doppel add work --name "Jane Doe" --email jane@acme.com --github-user jane-acme 
 | `doppel bind <id> <folder>...` | Uses an account for repos in these folders |
 | `doppel unbind <folder>...` | Removes folder rules |
 | `doppel default [<id> \| --none]` | Shows or sets the default account |
-| `doppel whoami [path] [--offline]` | Shows which account applies, and why; tries the repo's host unless `--offline` |
+| `doppel whoami [path] [--offline] [--json]` | Shows which account applies, and why; tries the repo's host unless `--offline` |
 | `doppel test [<id>]` | Logs in to each host and signs and verifies a test message |
 | `doppel export <id> [--auth\|--signing] [--no-copy]` | Prints and copies a public key, with where to add it on each host (`--no-copy` only prints it) |
 | `doppel upload <id> [--auth\|--signing]` | Adds the keys to the account's GitHub user through `gh` |

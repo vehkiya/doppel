@@ -154,12 +154,32 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - **R6.4** Outside any repo, it shows which account a repo created there would get. Git can only answer this for an existing repo, so here doppel applies the same folder rules itself.
   - This also covers a path that doesn't exist yet, such as a clone target.
   - For a plain folder inside an enclosing repo, such as a home directory managed with yadm, it shows the enclosing repo's account, plus the account a new repo there would get when that differs. *(Verified: pointing `GIT_DIR` at a `.git` that doesn't exist yet makes Git skip the folder rules.)*
+- **R6.5 Exit status:** `whoami` exits 0 whenever it successfully determines the identity in effect (or that no account applies). Non-zero exit codes are reserved for operational errors (such as an unreadable directory or Git failure).
+- **R6.6 Machine-readable output:** `whoami --json` prints the identity and repository state as JSON:
+  - `in_repo`: boolean, true if path is inside a Git repository
+  - `repo`: string, top-level repository path (empty outside a repository)
+  - `path`: string, path inspected
+  - `exists`: boolean, whether the path exists
+  - `account`: string, ID of the applying account (empty if none)
+  - `rule`: string, rule selecting the account (`folder <path>`, `default account`, `matched by Git`, or empty)
+  - `name`: string, effective Git `user.name`
+  - `email`: string, effective Git `user.email`
+  - `auth_key`: string, effective auth key reference (empty if using default SSH keys)
+  - `ssh_command`: string, effective `core.sshCommand`
+  - `signing_key`: string, effective `user.signingkey` (empty if none)
+  - `sign_commits`: boolean, effective `commit.gpgsign`
+  - `sign_tags`: boolean, effective `tag.gpgsign`
+  - `overrides`: array of strings, warnings for config settings or environment variables overriding account settings
+  - `new_repo_account`: string, account a new repo created here would get (empty if none)
+  - `new_repo_rule`: string, rule selecting new repo account (empty if none)
+  - `login`: object or null, result of remote login check (`ok`, `skipped`, `label`, `detail`, `fix`)
 
 ### R7. `doctor`
 
 Checks everything that could make Git use the wrong account, and prints a one-line fix under each finding.
 - A **problem** means Git may use the wrong account or fail, and makes `doctor` exit with status 1. A **warning** works but is worth knowing.
 - Without `--fix`, doctor writes nothing.
+- **Output streams:** doctor's diagnostic findings and summary are printed to stdout, as the command's primary output. stderr is reserved for command errors (such as invalid arguments or unreadable config).
 
 **Git and SSH**
 - Git is 2.34 or newer (checked before any command runs), and OpenSSH is 8.2 or newer, as Git needs to verify SSH signatures. *(problem)*
@@ -217,7 +237,7 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 
 ### R9. Interface
 
-- **R9.1** `doppel` with no arguments opens an account browser in the style of sshx when both stdin and stdout are terminals. Otherwise it prints `ls`.
+- **R9.1** `doppel` with no arguments opens an account browser in the style of sshx when both stdin and stdout are terminals and `ACCESSIBLE` is not set. Otherwise, or with `ACCESSIBLE` set, it prints `ls`.
   - **Left pane:** account IDs and emails, with the default marked ★; `/` filters.
   - **Right pane:** name, email, hosts, GitHub user, folders, keys with status badges (passphrase, in agent), signing, and the account file. On terminals narrower than 100 columns, Tab switches between the list and the details.
   - **Keys:** edit (`enter`/`e`), add (`a`), delete (`d`, then `y` to confirm), bind a folder (`b`), make default (`*`), export (`x`), upload to GitHub (`u`), test (`t`), quit (`q`/`esc`).
@@ -241,8 +261,9 @@ Checks everything that could make Git use the wrong account, and prints a one-li
     - Accessible prompts don't suggest anything.
 
   With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
-- **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers.
+- **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers, and `doppel` with no arguments prints `ls` instead of opening the full-screen browser.
 - **R9.2** Every action is also a subcommand, with flags for non-interactive use, so configsh or scripts can set up accounts.
+- **R9.2b Machine-readable output:** `doppel ls --json` outputs an array of account objects with stable fields: `id`, `name`, `email`, `default`, `hosts`, `github_user`, `folders`, `auth_key`, `signing_key`, `sign_commits`, and `sign_tags`. An empty list produces `[]`.
 - **R9.2a Shell completion:** `doppel completion zsh|bash|fish` prints a script that completes commands, flags, account IDs (with their emails), the folders bound to accounts for `unbind`, known hosts for `--host`, folders for `--folder`, `bind` and `whoami`, and files for `--auth-key` and `--signing-key`. It covers `dop` too.
   - The scripts are thin. They run the hidden `doppel __complete <words>`, which prints the candidates and whether the shell should complete paths itself, so `~` and quoting work as in the shell's own completion.
   - doppel learns each command's flags from the command itself, without running it, so completion can't fall behind the flags. `__complete` never writes, never asks anything, and doesn't fail: without Git or accounts it offers less.
@@ -258,16 +279,17 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 ## 5. Command line
 
 ```
-doppel                                   Browse accounts (prints ls when not in a terminal)
-doppel ls                                List accounts
+doppel                                   Browse accounts (prints ls when not in a terminal or under ACCESSIBLE)
+doppel ls [--json]                       List accounts
 doppel add [id]                          Add an account (wizard, or flags below)
 doppel edit <id>                         Edit an account (wizard, or flags below)
 doppel rm <id>                           Delete an account (keys are kept)
 doppel rename <id> <new-id>              Change an account's ID
 doppel bind <id> <folder>...             Bind folders to an account
-doppel unbind <folder>...                Remove folder bindings
+doppel unbind <folder>...                Remove folder rules
 doppel default [<id> | --none]           Show or set the default account
-doppel whoami [path] [--offline]         Show which account applies here, and why
+doppel whoami [path] [--offline] [--json]
+                                         Show which account applies here, and why
 doppel test [<id>]                       Log in to each host and sign a test message
 doppel doctor [--fix]                    Check every account for problems; --fix brings doppel's files up to date
 doppel export <id> [--auth|--signing] [--no-copy]
