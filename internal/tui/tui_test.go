@@ -101,11 +101,17 @@ func TestQuit(t *testing.T) {
 func TestViewFitsTheTerminal(t *testing.T) {
 	for _, size := range [][2]int{{60, 15}, {80, 20}, {120, 30}} {
 		for _, list := range [][]*accounts.Account{testAccounts(), nil} {
-			view := viewOf(newModel(t, list, size[0], size[1]))
-			for _, line := range strings.Split(view, "\n") {
-				if w := lipgloss.Width(line); w > size[0] {
-					t.Errorf("%dx%d (%d accounts): a line is %d wide:\n%s", size[0], size[1], len(list), w, line)
-					break
+			for _, stale := range []bool{false, true} {
+				env := &paths.Env{Home: "/home/jane", ConfigDir: "/home/jane/.config"}
+				info := map[string]KeyInfo{"personal": {Auth: []string{"passphrase", "in agent"}}, "work": {Auth: []string{"no passphrase"}}}
+				var m tea.Model = New(Options{Env: env, Accounts: list, KeyInfo: info, Selected: "work", StaleIndex: stale})
+				m, _ = m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+				view := viewOf(m)
+				for _, line := range strings.Split(view, "\n") {
+					if w := lipgloss.Width(line); w > size[0] {
+						t.Errorf("%dx%d (%d accounts, stale=%v): a line is %d wide:\n%s", size[0], size[1], len(list), stale, w, line)
+						break
+					}
 				}
 			}
 		}
@@ -271,5 +277,47 @@ func collect(cmd tea.Cmd, msgs *[]tea.Msg) {
 		}
 	default:
 		*msgs = append(*msgs, msg)
+	}
+}
+
+func TestStaleIndexNotice(t *testing.T) {
+	env := &paths.Env{Home: "/home/jane"}
+	// 1. Wide view
+	var m tea.Model = New(Options{Env: env, Accounts: testAccounts(), StaleIndex: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	view := viewOf(m)
+	if !strings.Contains(view, "STALE") || !strings.Contains(view, "index out of date · run doppel doctor --fix") {
+		t.Errorf("wide view missing stale notice:\n%s", view)
+	}
+
+	// 2. Narrow view (list)
+	m = New(Options{Env: env, Accounts: testAccounts(), StaleIndex: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	view = viewOf(m)
+	if !strings.Contains(view, "STALE") || !strings.Contains(view, "index out of date · run doppel doctor --fix") {
+		t.Errorf("narrow view list missing stale notice:\n%s", view)
+	}
+
+	// 3. Narrow view (details after tab)
+	m, _ = press(m, "tab")
+	view = viewOf(m)
+	if !strings.Contains(view, "STALE") || !strings.Contains(view, "index out of date · run doppel doctor --fix") {
+		t.Errorf("narrow view details missing stale notice:\n%s", view)
+	}
+
+	// 4. Empty view
+	m = New(Options{Env: env, Accounts: nil, StaleIndex: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	view = viewOf(m)
+	if !strings.Contains(view, "STALE") || !strings.Contains(view, "index out of date · run doppel doctor --fix") {
+		t.Errorf("empty view missing stale notice:\n%s", view)
+	}
+
+	// 5. When StaleIndex is false: no notice
+	m = New(Options{Env: env, Accounts: testAccounts(), StaleIndex: false})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	view = viewOf(m)
+	if strings.Contains(view, "STALE") || strings.Contains(view, "index out of date") {
+		t.Errorf("stale notice shown when StaleIndex is false:\n%s", view)
 	}
 }

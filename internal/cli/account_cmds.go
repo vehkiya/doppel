@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -107,10 +108,19 @@ func (a *app) cmdLs(args []string) int {
 		a.printf("%s\n", strings.TrimRight(line.String(), " "))
 	}
 	a.printf("\n")
-	if accounts.Default(list) != nil {
-		a.notef("★ default account, used for repos outside every folder")
-	} else {
+	var defaults []string
+	for _, acc := range list {
+		if acc.Default {
+			defaults = append(defaults, acc.ID)
+		}
+	}
+	switch len(defaults) {
+	case 0:
 		a.notef("No default account: repos outside every folder use your global Git config.")
+	case 1:
+		a.notef("★ default account, used for repos outside every folder")
+	default:
+		a.warnf("accounts %s are all marked as the default; pick one with `doppel default <id>`", strings.Join(defaults, ", "))
 	}
 	return 0
 }
@@ -309,8 +319,17 @@ func (a *app) cmdDefault(args []string) int {
 		if err != nil {
 			return a.fail(err)
 		}
-		if def := accounts.Default(list); def != nil {
-			a.printf("%s\n", def.ID)
+		var defaults []string
+		for _, acc := range list {
+			if acc.Default {
+				defaults = append(defaults, acc.ID)
+			}
+		}
+		if len(defaults) > 1 {
+			return a.fail(fmt.Errorf("accounts %s are all marked as the default; pick one with `doppel default <id>`", strings.Join(defaults, ", ")))
+		}
+		if len(defaults) == 1 {
+			a.printf("%s\n", defaults[0])
 		} else {
 			a.notef("No default account: repos outside every folder use your global Git config.")
 		}

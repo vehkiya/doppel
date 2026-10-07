@@ -31,6 +31,7 @@ type whoamiJSON struct {
 	NewRepoAccount string           `json:"new_repo_account"`
 	NewRepoRule    string           `json:"new_repo_rule"`
 	Login          *whoamiLoginJSON `json:"login"`
+	StaleIndex     bool             `json:"stale_index"`
 }
 
 type whoamiLoginJSON struct {
@@ -110,6 +111,7 @@ func (a *app) cmdWhoami(args []string) int {
 			NewRepoAccount: id.NewRepoID,
 			NewRepoRule:    id.NewRepoRule,
 			Login:          loginJSON,
+			StaleIndex:     id.StaleIndex,
 		})
 	}
 	if !id.InRepo {
@@ -122,6 +124,10 @@ func (a *app) cmdWhoami(args []string) int {
 			a.row("New repos", ui.Accent.Render(id.NewRepoID)+ui.Dim.Render(" ("+id.NewRepoRule+")"))
 		} else {
 			a.row("New repos", ui.Warn.Render("no doppel account")+ui.Dim.Render(" (your global Git config applies)"))
+		}
+		if id.StaleIndex {
+			a.printf("\n")
+			a.warnf("doppel's index is out of date; run `doppel doctor --fix`")
 		}
 		return 0
 	}
@@ -176,6 +182,9 @@ func (a *app) cmdWhoami(args []string) int {
 		if accounts.Default(list) == nil {
 			a.notef("No doppel account applies here. Bind this repo's folder with `doppel bind <id> <folder>`, or set a default with `doppel default <id>`.")
 		}
+		if id.StaleIndex {
+			a.warnf("doppel's index is out of date; run `doppel doctor --fix`")
+		}
 		return 0
 	}
 	if len(id.Overrides) > 0 {
@@ -183,6 +192,12 @@ func (a *app) cmdWhoami(args []string) int {
 		for _, line := range id.Overrides {
 			a.warnf("%s", line)
 		}
+	}
+	if id.StaleIndex {
+		if len(id.Overrides) == 0 {
+			a.printf("\n")
+		}
+		a.warnf("doppel's index is out of date; run `doppel doctor --fix`")
 	}
 	return 0
 }

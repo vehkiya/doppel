@@ -61,6 +61,9 @@ type Options struct {
 	// CheckUpdate looks for a newer doppel release in the background. It
 	// returns the latest version and whether it's newer; nil skips the check.
 	CheckUpdate func() (latest string, newer bool)
+
+	// StaleIndex reports whether doppel's index is missing or out of date.
+	StaleIndex bool
 }
 
 var (
@@ -121,6 +124,7 @@ type Model struct {
 	newRelease    string // a newer doppel release, once the check finds one
 	loadKeyInfo   func() map[string]KeyInfo
 	checkingKeys  bool // loadKeyInfo hasn't answered yet
+	staleIndex    bool
 }
 
 // keyInfoMsg carries the key details loaded in the background.
@@ -165,7 +169,7 @@ func New(opts Options) Model {
 		info = map[string]KeyInfo{}
 	}
 	return Model{list: l, keys: keys, env: opts.Env, info: info, width: 80, height: 20, status: opts.Status, checkUpdate: opts.CheckUpdate,
-		loadKeyInfo: opts.LoadKeyInfo, checkingKeys: opts.LoadKeyInfo != nil}
+		loadKeyInfo: opts.LoadKeyInfo, checkingKeys: opts.LoadKeyInfo != nil, staleIndex: opts.StaleIndex}
 }
 
 // styleList gives the list doppel's colors, over the defaults for a dark or
@@ -318,6 +322,9 @@ func (m Model) render() string {
 			valueStyle.Render("An account is a Git identity, its SSH keys, and the folders where it applies.") + "\n\n" +
 			lipgloss.NewStyle().Foreground(ui.ColorCyan).Render("[a] Add your first account") + "\n" +
 			ui.Dim.Render("[q] Quit")
+		if m.staleIndex {
+			card += "\n\n" + m.staleNotice()
+		}
 		if m.newRelease != "" {
 			card += "\n\n" + m.updateNotice()
 		}
@@ -339,6 +346,9 @@ func (m Model) render() string {
 	}
 
 	details := m.details(acc)
+	if m.staleIndex {
+		details = m.staleNotice() + "\n\n" + details
+	}
 	if m.newRelease != "" {
 		details = m.updateNotice() + "\n\n" + details
 	}
@@ -352,16 +362,24 @@ func (m Model) render() string {
 	}
 	if m.showDetails {
 		head := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorCyan).Render("⇥ Tab to return to the list") + "\n\n"
-		return detailStyle.Width(m.width - 4).MaxHeight(height).Render(head + m.details(acc))
+		return detailStyle.Width(m.width - 4).MaxHeight(height).Render(head + details)
 	}
 	var notes []string
 	if m.status != "" {
 		notes = append(notes, "  "+statusLine(m.status))
 	}
+	if m.staleIndex {
+		notes = append(notes, "  "+m.staleNotice())
+	}
 	if m.newRelease != "" {
 		notes = append(notes, "  "+m.updateNotice())
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, append([]string{m.list.View()}, notes...)...)
+}
+
+// staleNotice tells the user that the index is out of date.
+func (m Model) staleNotice() string {
+	return ui.BadgeWarn.Render("STALE") + " " + lipgloss.NewStyle().Foreground(ui.ColorAmber).Render("index out of date · run doppel doctor --fix")
 }
 
 // updateNotice tells the user a newer doppel is out.

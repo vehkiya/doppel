@@ -147,7 +147,11 @@ func (c *checker) files() {
 	var outdated []string
 	upToDate := false
 	if err := store.Save(env, p, c.Accounts, store.Options{}); err != nil {
-		c.problem("", "Can't bring doppel's files up to date: %v", err)
+		fix := ""
+		if strings.Contains(err.Error(), "doppel default <id>") {
+			fix = "Pick one with `doppel default <id>`"
+		}
+		c.problem(fix, "Can't bring doppel's files up to date: %v", err)
 	} else if changes, err := p.Changes(); err != nil {
 		c.problem("", "%v", err)
 	} else {

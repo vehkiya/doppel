@@ -133,3 +133,73 @@ func TestWhoamiJSON(t *testing.T) {
 		t.Errorf("whoamiJSON without accounts = %+v", id)
 	}
 }
+
+func TestWhoamiStaleIndex(t *testing.T) {
+	s := newSandbox(t)
+	s.addAccount("personal", "jane@personal.dev")
+	s.GitInit("projects/work/api")
+
+	// Initially, index is fresh.
+	out := s.mustRun("whoami", "projects/work/api", "--json")
+	var id whoamiJSON
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatal(err)
+	}
+	if id.StaleIndex {
+		t.Error("expected fresh index, got StaleIndex = true")
+	}
+
+	// Drop a new account file into accounts/.
+	s.Write(".config/doppel/accounts/work.gitconfig", `[doppel]
+	account = work
+	folder = ~/projects/work/
+[user]
+	name = Jane Work
+	email = jane@acme.com
+[core]
+	sshCommand = ssh
+[commit]
+	gpgsign = false
+[tag]
+	gpgsign = false
+`)
+
+	// whoami in repo detects stale index and suggests doctor --fix.
+	s.run("whoami", "projects/work/api")
+	if !strings.Contains(s.stderr.String(), "doppel's index is out of date; run `doppel doctor --fix`") {
+		t.Errorf("whoami didn't warn about stale index:\n%s", s.stderr.String())
+	}
+	s.stderr.Reset()
+
+	// whoami --json reports stale_index = true.
+	out = s.mustRun("whoami", "projects/work/api", "--json")
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatal(err)
+	}
+	if !id.StaleIndex {
+		t.Error("expected StaleIndex = true after dropping account file")
+	}
+
+	// whoami outside repo also warns.
+	s.run("whoami", s.Mkdir("notes"))
+	if !strings.Contains(s.stderr.String(), "doppel's index is out of date; run `doppel doctor --fix`") {
+		t.Errorf("whoami outside repo didn't warn about stale index:\n%s", s.stderr.String())
+	}
+	s.stderr.Reset()
+
+	// Running doctor --fix updates the index.
+	s.mustRun("doctor", "--fix")
+
+	// Now whoami is fresh again.
+	s.run("whoami", "projects/work/api")
+	if strings.Contains(s.stderr.String(), "doppel's index is out of date") {
+		t.Errorf("whoami still warned after doctor --fix:\n%s", s.stderr.String())
+	}
+	out = s.mustRun("whoami", "projects/work/api", "--json")
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatal(err)
+	}
+	if id.StaleIndex || id.Account != "work" {
+		t.Errorf("after fix: StaleIndex = %v, Account = %s", id.StaleIndex, id.Account)
+	}
+}
