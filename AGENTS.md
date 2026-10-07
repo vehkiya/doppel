@@ -13,6 +13,11 @@ Before committing, all of the following must pass cleanly:
 3. **Linting:** `golangci-lint run` reports no issues (`errcheck`, `govet`, `staticcheck`, `gosec`, `unused`, …). Don't silence a warning with `//nolint` unless an inline comment says why.
 4. **Dependencies:** `go mod tidy` leaves `go.mod` and `go.sum` unchanged.
 
+### 1.1 Git & Release Workflow
+* **Always use Pull Requests:** Direct pushes to `main` are forbidden, unless explicitly requested.
+* Every change, fix, chore, and release must be made on a dedicated branch and merged via a Pull Request.
+* Release workflows should be triggered by merging the release PR into `main` after CI checks pass.
+
 ---
 
 ## 2. Design Rules
