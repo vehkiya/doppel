@@ -97,15 +97,16 @@ func TestTestSuggestsTheKeychain(t *testing.T) {
 	if !strings.Contains(s.stdout.String(), "load it with `ssh-add --apple-use-keychain ~/.ssh/id_locked`") {
 		t.Errorf("batch test doesn't suggest the Keychain:\n%s", s.stdout.String())
 	}
-	// With one, ssh asks for the passphrase, and test says how to stop that.
+	// In a terminal, test also names the Keychain hint under the account.
 	s.tty = true
-	out := s.mustRun("test", "work")
-	if !strings.Contains(out, "~/.ssh/id_locked isn't in your agent, so macOS asks for its passphrase. Keep it in the Keychain: ssh-add --apple-use-keychain ~/.ssh/id_locked") {
-		t.Errorf("test doesn't suggest the Keychain:\n%s", out)
+	s.mustFail(1, "test", "work")
+	if !strings.Contains(s.stdout.String(), "~/.ssh/id_locked isn't in your agent, so macOS asks for its passphrase. Keep it in the Keychain: ssh-add --apple-use-keychain ~/.ssh/id_locked") {
+		t.Errorf("test doesn't suggest the Keychain:\n%s", s.stdout.String())
 	}
 	s.goos = "linux"
-	if out := s.mustRun("test", "work"); strings.Contains(out, "Keychain") {
-		t.Errorf("suggested the Keychain on Linux:\n%s", out)
+	s.mustFail(1, "test", "work")
+	if strings.Contains(s.stdout.String(), "Keychain") {
+		t.Errorf("suggested the Keychain on Linux:\n%s", s.stdout.String())
 	}
 }
 

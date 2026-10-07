@@ -18,29 +18,29 @@ type Check struct {
 }
 
 // Test logs in to each of acc's hosts and signs a test message, verifying
-// it against signers as Git would. It reports each check as it finishes:
-// without batch, ssh may ask for a passphrase in between. failed is true
-// when any check failed.
-func Test(ctx Context, acc *accounts.Account, signers string, batch bool, report func(Check)) (failed bool) {
+// it against signers as Git would. It reports each check as it finishes.
+// Checks run non-interactively without prompting for passphrases. failed is
+// true when any check failed.
+func Test(ctx Context, acc *accounts.Account, signers string, report func(Check)) (failed bool) {
 	for _, host := range acc.Hosts {
-		c := Login(ctx, acc, host, batch)
+		c := Login(ctx, acc, host)
 		report(c)
 		failed = failed || !c.OK
 	}
-	c := Sign(ctx, acc, signers, batch)
+	c := Sign(ctx, acc, signers)
 	report(c)
 	return failed || (!c.OK && !c.Skipped)
 }
 
-// Login logs in to host with acc's auth key and says how it went. On
-// GitHub it also checks the key logs in as the account's GitHub user. With
-// batch, nothing may ask for anything, such as a passphrase.
-func Login(ctx Context, acc *accounts.Account, host string, batch bool) Check {
+// Login logs in to host with acc's auth key in batch mode and says how it went.
+// On GitHub it also checks the key logs in as the account's GitHub user.
+// Nothing asks for anything, such as a passphrase.
+func Login(ctx Context, acc *accounts.Account, host string) Check {
 	c := Check{Label: host}
-	if c.Detail = needsPassphrase(ctx, acc.AuthKey, batch); c.Detail != "" {
+	if c.Detail = needsPassphrase(ctx, acc.AuthKey); c.Detail != "" {
 		return c
 	}
-	res := keys.Login(host, acc.AuthKey.Map(ctx.Env.Expand), batch)
+	res := keys.Login(host, acc.AuthKey.Map(ctx.Env.Expand), true)
 	switch {
 	case !res.Accepted:
 		c.Detail = res.Problem
@@ -53,14 +53,14 @@ func Login(ctx Context, acc *accounts.Account, host string, batch bool) Check {
 }
 
 // Sign signs a test message with acc's signing key and verifies it against
-// the allowed_signers file signers, as Git does.
-func Sign(ctx Context, acc *accounts.Account, signers string, batch bool) Check {
+// the allowed_signers file signers in batch mode, as Git does.
+func Sign(ctx Context, acc *accounts.Account, signers string) Check {
 	c := Check{Label: "signing"}
 	switch {
 	case acc.SigningKey == "":
 		c.Skipped, c.Detail = true, "off"
-	case needsPassphrase(ctx, acc.SigningKey, batch) != "":
-		c.Detail = needsPassphrase(ctx, acc.SigningKey, batch)
+	case needsPassphrase(ctx, acc.SigningKey) != "":
+		c.Detail = needsPassphrase(ctx, acc.SigningKey)
 	default:
 		if err := keys.SignCheck(acc.SigningKey.Map(ctx.Env.Expand), acc.Email, signers); err != nil {
 			c.Detail = err.Error()
@@ -72,10 +72,10 @@ func Sign(ctx Context, acc *accounts.Account, signers string, batch bool) Check 
 }
 
 // needsPassphrase explains why a key can't be used when nothing may ask
-// for its passphrase (batch): it has one, and ssh-agent doesn't hold it.
+// for its passphrase: it has one, and ssh-agent doesn't hold it.
 // It returns "" when the key can be used.
-func needsPassphrase(ctx Context, key keys.Ref, batch bool) string {
-	if key == "" || !batch {
+func needsPassphrase(ctx Context, key keys.Ref) string {
+	if key == "" {
 		return ""
 	}
 	path := key.Map(ctx.Env.Expand)

@@ -217,5 +217,5 @@ func RemoteLogin(ctx Context, acc *accounts.Account, repo string) (c Check, ok b
 			Fix:     hosts.SwitchToSSH(remote, ""),
 		}, true
 	}
-	return Login(ctx, acc, host, true), true
+	return Login(ctx, acc, host), true
 }

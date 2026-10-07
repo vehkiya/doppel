@@ -36,7 +36,7 @@ Before committing, all of the following must pass cleanly:
 ### 2.1 Dependencies
 * doppel is a single static binary: the Go standard library plus the Charm libraries (`bubbletea`, `bubbles`, `huh` and `lipgloss`, all v2 from `charm.land`, and the `charmbracelet/x` and `colorprofile` helpers they're built on). No CGO.
 * At runtime it calls `git`, `ssh`, `ssh-keygen`, `ssh-add` and, optionally, `gh` (2.40 or newer). Nothing else.
-* **Run tools through `proc.Command`** with a time limit (`proc.Local` or `proc.Network`), so a hung agent or a silent server can't freeze doppel. Only a command that may ask the user something, such as `ssh-keygen` asking for a passphrase, runs without one.
+* **Run tools through `proc.Command`** with a time limit (`proc.Local` or `proc.Network`), so a hung agent or a silent server can't freeze doppel. Only a command that may ask the user something, such as `ssh-keygen` asking for a passphrase when generating a key, runs without one.
 * **Don't fetch a token to answer a question:** whether a host is GitHub comes from `gh auth status`, which never prints one, and `hosts.GitHub` remembers the answer for the rest of the command (`app.github`, which the browser makes forget each time it opens).
 
 ### 2.2 Git config integrity

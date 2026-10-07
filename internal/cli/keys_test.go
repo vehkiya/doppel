@@ -351,7 +351,7 @@ func TestTestCommand(t *testing.T) {
 		t.Errorf("no mismatch reported:\n%s", s.stdout.String())
 	}
 
-	// A key with a passphrase can't be used without a terminal or an agent.
+	// A key with a passphrase can't be used without an agent.
 	s.Key("id_locked", "jane@acme.com", "a passphrase")
 	s.mustRun("edit", "work", "--auth-key", "~/.ssh/id_locked", "--sign-with-auth-key", "--github-user", "jane-acme")
 	s.mustFail(1, "test", "work")
