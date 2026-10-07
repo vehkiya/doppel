@@ -115,7 +115,7 @@ doppel test                     # log in to each host and sign a test message
 doppel upload work              # add work's keys to its GitHub user
 ```
 
-The first `doppel add` offers to start from the identity already in your `~/.gitconfig`, including an existing SSH signing setup.
+On the first run with no accounts configured, doppel detects existing Git identities in your `~/.gitconfig` (including conditional `includeIf "gitdir:..."` setups) and offers to import them into doppel accounts with an automatic backup of your global Git config.
 
 The same without questions, for scripts:
 

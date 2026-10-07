@@ -45,6 +45,9 @@ type app struct {
 	// Enter after an action that printed some.
 	warnings int
 
+	// importDeclined notes that the user declined importing accounts from Git config.
+	importDeclined bool
+
 	// collectFlags, when set, receives a command's flags from parseCommand,
 	// which then stops the command: shell completion reads them this way.
 	collectFlags func(*flag.FlagSet)

@@ -55,9 +55,13 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - **Folders**
 - **R1.3** Deleting an account removes its account file, its folders and its `allowed_signers` entries, retired ones (R4.3) included: doppel stops trusting its keys. To keep verifying its old commits, keep a copy of its entries outside doppel's block. It never deletes key files. If the account was the default, doppel asks in a terminal which account becomes the new default, or none. Without a terminal it leaves none and says how to pick one.
 - **R1.4** Renaming an account (changing its ID) keeps everything else unchanged.
-- **R1.5 First run.** If the global Git config already has `user.name` and `user.email`, the add wizard for the first account offers to start from them. They may be set in a file the global config includes, as dotfile setups often do; doppel's own files are left out.
-  - It also brings in any SSH signing setup (`gpg.format = ssh`, `user.signingkey`, `commit.gpgsign`, `tag.gpgsign`) and an auth key named with `-i` in `core.sshCommand`.
-  - Every value can still be changed before saving.
+- **R1.5 First run.** On the first interactive run (with 0 accounts in doppel, when running `doppel` or `doppel add`), doppel checks the global Git config for existing identities.
+  - **Multi-account import:** When multiple accounts are detected—via a top-level `[user]` base identity and/or conditional `[includeIf "gitdir:..."]` (and `gitdir/i:`) directives pointing to files with identity settings (`user.name`/`user.email`)—doppel displays a summary card of discovered accounts and prompts to import them.
+    - Suggested IDs are derived from the included files' names (e.g. `.gitconfig-work` -> `work`) or bound folders, sanitized and deduplicated. The base identity defaults to `personal` (or `default`) and is marked as default.
+    - Accepting the import creates doppel account files for each identity, creates a backup of the global config (`.<name>.doppel.bak`), cleans up the imported `includeIf` directives, generates `index.gitconfig`, and appends doppel's include block.
+    - Declining leaves the global Git config untouched and proceeds to a fresh setup.
+  - **Single identity:** If only a single identity is found, the add wizard offers to start from it (its name, email, SSH signing setup, and auth key from `core.sshCommand`), which can be reviewed and edited before saving.
+  - Non-interactive invocations and scripts never prompt.
   - The global settings stay where they are; doppel's include overrides them.
 
 ### R2. Folders and the default account

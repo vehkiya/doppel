@@ -24,6 +24,17 @@ func (a *app) browse() int {
 		if err != nil {
 			return a.fail(err)
 		}
+		if len(list) == 0 {
+			if imported, err := a.initialImport(); err != nil {
+				return a.fail(err)
+			} else if imported {
+				list, err = accounts.Load(a.env)
+				if err != nil {
+					return a.fail(err)
+				}
+				status = "Imported accounts"
+			}
+		}
 		act, err := tui.Run(tui.Options{
 			Env: a.env, Accounts: list, LoadKeyInfo: func() map[string]tui.KeyInfo { return a.keyInfo(list) },
 			Selected: selected, Status: status,
@@ -164,4 +175,31 @@ func (a *app) keyInfo(list []*accounts.Account) map[string]tui.KeyInfo {
 		info[acc.ID] = ki
 	}
 	return info
+}
+
+// initialImport checks for existing multi-account setup in Git config on first
+// interactive run, prompts the user, and imports if confirmed.
+func (a *app) initialImport() (bool, error) {
+	if a.importDeclined || !a.interactive {
+		return false, nil
+	}
+	disc, err := accounts.Discover(a.env)
+	if err != nil || len(disc.Accounts) < 2 {
+		return false, err
+	}
+	use, err := a.promptImport(disc)
+	if err != nil {
+		return false, err
+	}
+	if !use {
+		a.importDeclined = true
+		return false, nil
+	}
+	_, err = a.change(writeFlags{}, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
+		return ops.Import(ctx, ops.ImportRequest{Discovered: disc})
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
