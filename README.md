@@ -219,49 +219,6 @@ The index uses Git's own [`includeIf "gitdir:…"`](https://git-scm.com/docs/git
 
 ---
 
-## 🔄 Syncing between machines
-
-If you work across multiple machines, you can keep your doppel accounts in sync with dotfiles, Git, or a sync tool.
-
-### What to sync
-
-* **Sync this:** `~/.config/doppel/accounts/*.gitconfig`
-  Account files are the source of truth. They contain your identities, emails, bound folders, and key references, and sync cleanly across machines.
-
-### What NOT to sync (machine-local)
-
-* **`~/.config/doppel/index.gitconfig`:** generated locally on each machine. It depends on machine-specific conditions, such as `gitdir/i:` on macOS for case-insensitive filesystems vs. `gitdir:` on Linux.
-* **`~/.gitconfig` include block:** points to the local `index.gitconfig` on that machine.
-* **`~/.ssh/allowed_signers`:** the managed signing keys block is kept locally on each machine.
-
-Add `index.gitconfig` to your dotfiles repo's `.gitignore`:
-```gitignore
-index.gitconfig
-```
-
-### After syncing
-
-When account files arrive on a new machine or are updated from another machine, the local index won't reflect them yet:
-
-1. Run `doppel doctor --fix` to regenerate `index.gitconfig` and update `allowed_signers` on the current machine.
-2. If you forget, `doppel whoami` and the account browser (`doppel`) detect when the index is out of date and suggest running `doppel doctor --fix`.
-
-### Handling two defaults
-
-Each account file records whether it is the default (`doppel.default`). If two machines picked different default accounts and both files are synced, both accounts will be marked as default.
-
-When this happens, doppel stops write operations and `doppel default` with an error:
-```console
-accounts personal, work are all marked as the default; pick one with `doppel default <id>`
-```
-
-Resolve the conflict by choosing which account should be the default on this machine:
-```bash
-doppel default work
-```
-
----
-
 ## 🔑 Using a different SSH agent
 
 doppel never talks to an agent itself. Two programs do, and both use the agent that `SSH_AUTH_SOCK` points at:
@@ -337,6 +294,50 @@ An account's GitHub username applies to all its GitHub hosts. Separate identitie
 * **A damaged file can't lock doppel out:** doppel's own Git calls run without your global config, so even a broken folder-rules file can't stop doppel from rewriting it. doppel won't append to a `~/.gitconfig` that Git itself can't read.
 * **Key files:** doppel never overwrites or deletes them.
 * **Getting out:** `doppel uninstall` takes the include and the `allowed_signers` block back out.
+
+---
+
+## 🔄 Syncing between machines
+
+> [!NOTE]
+> Doppel does not sync configs or keys between machines itself. This section is a guide for syncing your account files using a third-party tool such as a dotfiles repository, Git, Syncthing, or Unison.
+
+### What to sync
+
+* **Sync this:** `~/.config/doppel/accounts/*.gitconfig`
+  Account files are the source of truth. They contain your identities, emails, bound folders, and key references, and sync cleanly across machines.
+
+### What NOT to sync (machine-local)
+
+* **`~/.config/doppel/index.gitconfig`:** generated locally on each machine. It depends on machine-specific conditions, such as `gitdir/i:` on macOS for case-insensitive filesystems vs. `gitdir:` on Linux.
+* **`~/.gitconfig` include block:** points to the local `index.gitconfig` on that machine.
+* **`~/.ssh/allowed_signers`:** the managed signing keys block is kept locally on each machine.
+
+Add `index.gitconfig` to your dotfiles repo's `.gitignore`:
+```gitignore
+index.gitconfig
+```
+
+### After syncing
+
+When account files arrive on a new machine or are updated from another machine, the local index won't reflect them yet:
+
+1. Run `doppel doctor --fix` to regenerate `index.gitconfig` and update `allowed_signers` on the current machine.
+2. If you forget, `doppel whoami` and the account browser (`doppel`) detect when the index is out of date and suggest running `doppel doctor --fix`.
+
+### Handling two defaults
+
+Each account file records whether it is the default (`doppel.default`). If two machines picked different default accounts and both files are synced, both accounts will be marked as default.
+
+When this happens, doppel stops write operations and `doppel default` with an error:
+```console
+accounts personal, work are all marked as the default; pick one with `doppel default <id>`
+```
+
+Resolve the conflict by choosing which account should be the default on this machine:
+```bash
+doppel default work
+```
 
 ---
 
