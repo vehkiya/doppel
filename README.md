@@ -85,7 +85,7 @@ doppel version
 
 - **`doppel: command not found`?** Add `~/.local/bin` to your `PATH`, for example with `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`.
 - **For every user on the machine:** install it with `sudo install -m 0755 doppel_*/doppel /usr/local/bin/doppel` instead. `doppel update` then needs `sudo` too, since it replaces the binary where it is.
-- **A specific version:** replace `latest/download` with `download/<version>`, such as `download/v0.8.1`. The versioned archives, such as `doppel_v0.8.1_linux_amd64.tar.gz`, hold the same binary.
+- **A specific version:** replace `latest/download` with `download/<version>`, such as `download/v1.0.0`. The versioned archives, such as `doppel_v1.0.0_linux_amd64.tar.gz`, hold the same binary.
 - **Downloaded in a browser on macOS?** macOS may refuse to open it. Clear the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/doppel`. Files downloaded with `curl` aren't flagged.
 - **Checking more:** to also check the signature on `checksums.txt` and GitHub's build provenance, see [SECURITY.md](SECURITY.md#verifying-a-release).
 

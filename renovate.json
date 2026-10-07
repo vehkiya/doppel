@@ -24,6 +24,11 @@
       "groupName": "Go"
     },
     {
+      "description": "Keep ubuntu:22.04 pinned for testing minimum supported Git version",
+      "matchPackageNames": ["ubuntu"],
+      "enabled": false
+    },
+    {
       "matchUpdateTypes": [
         "minor",
         "patch",
