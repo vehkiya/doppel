@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -76,5 +77,59 @@ func TestWhoamiForAFutureCloneInsideARepo(t *testing.T) {
 	}
 	if got := s.GitConfig(s.GitInit("work/newclone"), "user.email"); got != "jane@acme.com" {
 		t.Errorf("the clone got %q", got)
+	}
+}
+
+func TestWhoamiJSON(t *testing.T) {
+	s := newSandbox(t)
+	s.addAccount("personal", "jane@personal.dev", "--name", "Jane Personal")
+	s.addAccount("work", "jane@acme.com", "--name", "Jane Work", "--folder", "~/projects/work")
+	api := s.GitInit("projects/work/api")
+
+	// 1. In a repo with an account applied.
+	out := s.mustRun("whoami", "projects/work/api", "--json")
+	var id whoamiJSON
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatalf("failed to parse whoami --json: %v\n%s", err, out)
+	}
+	if !id.InRepo || id.Account != "work" || id.Rule != "folder ~/projects/work/" ||
+		id.Email != "jane@acme.com" || id.Name != "Jane Work" || !id.Exists ||
+		len(id.Overrides) != 0 || id.Login != nil {
+		t.Errorf("whoamiJSON = %+v", id)
+	}
+
+	// 2. With overrides: override should be in the JSON, and stderr should be empty.
+	if _, err := git.Run(api, "config", "user.email", "override@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	out = s.mustRun("whoami", "projects/work/api", "--json")
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatalf("failed to parse whoami --json: %v\n%s", err, out)
+	}
+	if len(id.Overrides) != 1 || !strings.Contains(id.Overrides[0], "user.email = override@example.com") {
+		t.Errorf("whoamiJSON overrides = %v", id.Overrides)
+	}
+	if s.stderr.Len() > 0 {
+		t.Errorf("unexpected stderr when --json is passed:\n%s", s.stderr.String())
+	}
+
+	// 3. Outside a repository.
+	out = s.mustRun("whoami", s.Mkdir("notes"), "--json")
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatalf("failed to parse whoami --json: %v\n%s", err, out)
+	}
+	if id.InRepo || id.Account != "" || id.NewRepoAccount != "personal" || id.NewRepoRule != "default account" {
+		t.Errorf("outside repo whoamiJSON = %+v", id)
+	}
+
+	// 4. In a repository without any doppel accounts.
+	s2 := newSandbox(t)
+	s2.GitInit("bare-repo")
+	out = s2.mustRun("whoami", "bare-repo", "--json")
+	if err := json.Unmarshal([]byte(out), &id); err != nil {
+		t.Fatalf("failed to parse whoami --json without accounts: %v\n%s", err, out)
+	}
+	if !id.InRepo || id.Account != "" || id.Rule != "" {
+		t.Errorf("whoamiJSON without accounts = %+v", id)
 	}
 }

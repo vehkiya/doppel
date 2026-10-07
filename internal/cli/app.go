@@ -3,6 +3,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -85,6 +86,16 @@ func (a *app) usageError(usage string) int {
 	return 2
 }
 
+// printJSON prints v as indented JSON to stdout.
+func (a *app) printJSON(v any) int {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return a.fail(err)
+	}
+	a.printf("%s\n", data)
+	return 0
+}
+
 // confirm asks a yes/no question that defaults to no. assumeYes (--yes)
 // answers it up front; without a terminal to ask on, it fails instead.
 func (a *app) confirm(question string, assumeYes bool) error {
@@ -165,7 +176,7 @@ func newApp() (*app, error) {
 		stdout:      ui.Writer(os.Stdout),
 		stderr:      ui.Writer(os.Stderr),
 		interactive: term.IsTerminal(os.Stdin.Fd()),
-		browsable:   term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()),
+		browsable:   term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) && os.Getenv("ACCESSIBLE") == "",
 		// ACCESSIBLE turns forms into plain prompts for screen readers, as in other Charm tools.
 		accessible: os.Getenv("ACCESSIBLE") != "",
 		generate: func(path, comment string) error {
@@ -182,7 +193,7 @@ func newApp() (*app, error) {
 // run dispatches the command line and returns the process exit status.
 func (a *app) run(args []string) int {
 	defer a.unlockWrites()
-	if len(args) == 0 && a.browsable {
+	if len(args) == 0 && a.browsable && !a.accessible {
 		if err := git.Check(); err != nil {
 			return a.fail(err)
 		}
@@ -244,8 +255,8 @@ func (a *app) commands() map[string]func([]string) int {
 func (a *app) printUsage() {
 	a.printf("%s\n\n", ui.Title.Render("doppel — Git accounts per folder"))
 	a.printf(`Usage:
-  doppel                                 Browse accounts (lists them when not in a terminal)
-  doppel ls                              List accounts
+  doppel                                 Browse accounts (lists them when not in a terminal or under ACCESSIBLE)
+  doppel ls [--json]                     List accounts
   doppel add [<id>]                      Add an account, asking for each setting
   doppel add <id> --name <name> --email <email> [--host <host>]...
              [--github-user <user>] [--folder <folder>]... [--default]
@@ -258,7 +269,8 @@ func (a *app) printUsage() {
   doppel bind <id> <folder>...           Use an account for repos in these folders
   doppel unbind <folder>...              Remove folder rules
   doppel default [<id> | --none]         Show or set the default account
-  doppel whoami [path] [--offline]       Show which account applies, and why
+  doppel whoami [path] [--offline] [--json]
+                                         Show which account applies, and why
   doppel test [<id>]                     Log in to each host and sign a test message
   doppel export <id> [--auth|--signing]
              [--no-copy]                 Print and copy a public key, with where to add it
@@ -288,7 +300,8 @@ Commands that change files accept:
   --dry-run   show the changes without writing them
   --yes       answer yes to confirmations
 
-Set ACCESSIBLE=1 for plain prompts instead of interactive forms.
+Set ACCESSIBLE=1 for plain prompts instead of interactive forms, and plain
+listings instead of the account browser.
 
 Accounts live in ~/.config/doppel/accounts/<id>.gitconfig. Repos inside a
 bound folder use that folder's account; everything else uses the default.

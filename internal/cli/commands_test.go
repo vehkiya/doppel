@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -166,6 +167,61 @@ func TestLs(t *testing.T) {
 		if line != strings.TrimRight(line, " ") {
 			t.Errorf("trailing spaces in %q", line)
 		}
+	}
+}
+
+func TestLsJSON(t *testing.T) {
+	s := newSandbox(t)
+	// Empty list outputs empty array.
+	out := s.mustRun("ls", "--json")
+	if strings.TrimSpace(out) != "[]" {
+		t.Fatalf("ls --json with no accounts = %q, want []", out)
+	}
+
+	s.addAccount("personal", "jane@personal.dev", "--name", "Jane Doe")
+	s.addAccount("work", "jane@acme.com", "--name", "Jane Acme", "--folder", "~/projects/work", "--folder", "~/clients", "--github-user", "jane-acme")
+
+	out = s.mustRun("ls", "--json")
+	var accounts []accountJSON
+	if err := json.Unmarshal([]byte(out), &accounts); err != nil {
+		t.Fatalf("failed to parse ls --json output: %v\n%s", err, out)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("got %d accounts, want 2", len(accounts))
+	}
+
+	// Accounts are ordered alphabetically by ID: personal, then work.
+	p := accounts[0]
+	if p.ID != "personal" || p.Name != "Jane Doe" || p.Email != "jane@personal.dev" || !p.Default ||
+		!slices.Equal(p.Hosts, []string{"github.com"}) || p.GitHubUser != "" || len(p.Folders) != 0 ||
+		p.AuthKey != "" || p.SigningKey != "" || p.SignCommits || p.SignTags {
+		t.Errorf("personal account JSON = %+v", p)
+	}
+
+	w := accounts[1]
+	if w.ID != "work" || w.Name != "Jane Acme" || w.Email != "jane@acme.com" || w.Default ||
+		!slices.Equal(w.Hosts, []string{"github.com"}) || w.GitHubUser != "jane-acme" ||
+		!slices.Equal(w.Folders, []string{"~/projects/work/", "~/clients/"}) ||
+		w.AuthKey != "" || w.SigningKey != "" || w.SignCommits || w.SignTags {
+		t.Errorf("work account JSON = %+v", w)
+	}
+}
+
+func TestAccessibleNeverOpensBrowser(t *testing.T) {
+	s := newSandbox(t)
+	s.tty = true
+	s.addAccount("work", "jane@acme.com")
+	a := s.newApp(s.Home)
+	a.browsable = true
+	a.accessible = true
+
+	code := a.run(nil)
+	if code != 0 {
+		t.Fatalf("run(nil) under ACCESSIBLE exit status = %d, want 0", code)
+	}
+	out := s.stdout.String()
+	if !strings.Contains(out, "work") || !strings.Contains(out, "jane@acme.com") {
+		t.Errorf("expected ls output under ACCESSIBLE, got:\n%s", out)
 	}
 }
 

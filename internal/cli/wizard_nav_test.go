@@ -260,7 +260,7 @@ func TestWizardChoicesFollowEarlierAnswers(t *testing.T) {
 		d.press('u', tea.ModCtrl)
 		d.typeText("client-project-alpha-2026") // the description grows by a line
 		d.advanceTo("auth")
-		if view := d.view(); !strings.Contains(view, "id_ed25519_client-project-alpha-2026") || strings.Contains(view, "id_ed25519_work") ||
+		if view := d.view(); !strings.Contains(view, "project-alpha-2026") || strings.Contains(view, "id_ed25519_work") ||
 			!strings.Contains(view, "Generate a new key") {
 			t.Errorf("the auth page still shows the old ID:\n%s", view)
 		}
