@@ -33,6 +33,7 @@ type plannedFile struct {
 	old     []byte
 	existed bool
 	remove  bool
+	force   bool
 }
 
 // Change is one file a plan will create, modify or remove.
@@ -191,6 +192,16 @@ func (p *Plan) Content(path string) ([]byte, bool, error) {
 	return data, true, nil
 }
 
+// Force marks path to be written on Apply even if its content equals its
+// existing content.
+func (p *Plan) Force(path string) error {
+	if _, err := p.Stage(path); err != nil {
+		return err
+	}
+	p.files[path].force = true
+	return nil
+}
+
 // Changes lists the files whose content the plan changes, in staging order.
 func (p *Plan) Changes() ([]Change, error) {
 	var changes []Change
@@ -200,7 +211,7 @@ func (p *Plan) Changes() ([]Change, error) {
 		if err != nil {
 			return nil, err
 		}
-		if exists == f.existed && bytes.Equal(data, f.old) {
+		if exists == f.existed && bytes.Equal(data, f.old) && !f.force {
 			continue
 		}
 		changes = append(changes, Change{Path: path, Old: f.old, New: data, Existed: f.existed, Exists: exists})
