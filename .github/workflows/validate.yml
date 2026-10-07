@@ -57,7 +57,7 @@ jobs:
   test-min-git:
     name: Test (Git 2.34)
     runs-on: ubuntu-latest
-    container: ubuntu:22.04
+    container: ubuntu:26.04
     permissions:
       contents: read
     steps:
