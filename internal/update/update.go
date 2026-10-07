@@ -119,6 +119,11 @@ type cache struct {
 	LatestVersion string `json:"latest_version"`
 }
 
+// CachePath returns the path to the update check cache file.
+func CachePath() (string, error) {
+	return cachePath()
+}
+
 func cachePath() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {

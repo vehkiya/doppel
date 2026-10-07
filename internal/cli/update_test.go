@@ -148,12 +148,19 @@ func TestStartupUpdateCheck(t *testing.T) {
 	version.Version = "v0.9.0"
 	t.Cleanup(func() { version.Version = oldVer })
 
-	// Set XDG_CACHE_HOME so cache goes into the sandbox
-	cacheDir := filepath.Join(s.Home, ".cache")
-	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	// Point release API to a dummy test server so tests never contact real GitHub
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(&update.Release{TagName: "v1.0.0"})
+	}))
+	t.Cleanup(srv.Close)
+	restoreURL := update.SetReleasesURLForTest(srv.URL)
+	t.Cleanup(restoreURL)
 
 	// Write cache with a newer version
-	cacheFile := filepath.Join(cacheDir, "doppel", "update-check.json")
+	cacheFile, err := update.CachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Dir(cacheFile), 0700); err != nil {
 		t.Fatal(err)
 	}
