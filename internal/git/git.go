@@ -195,7 +195,7 @@ func readIncludes(path string, skip func(string) bool, depth int) ([]ConfigEntry
 		if e.Key != "include.path" {
 			continue
 		}
-		included := includePath(path, e.Value)
+		included := IncludePath(path, e.Value)
 		if included == "" || skip(included) {
 			continue
 		}
@@ -211,9 +211,9 @@ func readIncludes(path string, skip func(string) bool, depth int) ([]ConfigEntry
 	return entries, nil
 }
 
-// includePath resolves an include.path value as Git does: "~/" is the home
+// IncludePath resolves an include.path value as Git does: "~/" is the home
 // directory, and a relative path is relative to the including file's folder.
-func includePath(from, value string) string {
+func IncludePath(from, value string) string {
 	switch {
 	case value == "":
 		return ""

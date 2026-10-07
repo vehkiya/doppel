@@ -1,10 +1,12 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/plan"
@@ -195,4 +197,56 @@ func Overrides(env *paths.Env, managed []string) (path string, found bool, overr
 		}
 	}
 	return path, true, overriding, nil
+}
+
+// CleanIncludes removes the specified includeIf directives from Git config files.
+func CleanIncludes(env *paths.Env, p *plan.Plan, cleanups []accounts.IncludeCleanup) error {
+	byFile := map[string][]accounts.IncludeCleanup{}
+	for _, c := range cleanups {
+		byFile[c.ConfigFile] = append(byFile[c.ConfigFile], c)
+	}
+	for file, items := range byFile {
+		staged, err := p.Stage(file)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			_ = git.ConfigFile(staged, "--unset-all", item.Key)
+			_ = git.ConfigFile(staged, "--remove-section", "includeIf."+item.Subsection)
+			_ = git.ConfigFile(staged, "--remove-section", "includeif."+item.Subsection)
+		}
+		data, exists, err := p.Content(file)
+		if err != nil || !exists {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		var filtered []string
+		for i := 0; i < len(lines); i++ {
+			line := lines[i]
+			trimmed := strings.TrimSpace(line)
+			shouldDrop := false
+			for _, item := range items {
+				h1 := fmt.Sprintf(`[includeIf "%s"]`, item.Subsection)
+				h2 := fmt.Sprintf(`[includeif "%s"]`, item.Subsection)
+				h3 := fmt.Sprintf(`[includeIf '%s']`, item.Subsection)
+				h4 := fmt.Sprintf(`[includeif '%s']`, item.Subsection)
+				if strings.EqualFold(trimmed, h1) || strings.EqualFold(trimmed, h2) ||
+					strings.EqualFold(trimmed, h3) || strings.EqualFold(trimmed, h4) {
+					if sectionEndsAt(lines, i+1) {
+						shouldDrop = true
+						break
+					}
+				}
+			}
+			if !shouldDrop {
+				filtered = append(filtered, line)
+			}
+		}
+		if len(filtered) != len(lines) {
+			if err := p.SetContent(file, []byte(strings.Join(filtered, "\n"))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

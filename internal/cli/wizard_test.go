@@ -189,3 +189,179 @@ func TestBrowserActions(t *testing.T) {
 		t.Error("the browser didn't wait for Enter after an error")
 	}
 }
+
+func TestAddWizardMultiAccountImportAccepted(t *testing.T) {
+	s := newSandbox(t)
+	s.Key("id_work", "jane@work.com", "")
+
+	s.Write(".gitconfig-work", `[user]
+	name = Jane Work
+	email = jane@work.com
+	signingkey = ~/.ssh/id_work.pub
+[gpg]
+	format = ssh
+[commit]
+	gpgsign = true
+[tag]
+	gpgsign = true
+[core]
+	sshCommand = ssh -i ~/.ssh/id_work
+`)
+	s.Write(".gitconfig-oss", `[user]
+	name = Jane OSS
+	email = jane@oss.org
+`)
+	s.Write(".gitconfig", `[user]
+	name = Jane Personal
+	email = jane@personal.dev
+
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+
+[includeIf "gitdir:~/oss/"]
+	path = ~/.gitconfig-oss
+`)
+
+	s.tty = true
+	s.stdin = script("")
+	s.mustRun("add")
+
+	if !s.Exists(".gitconfig.doppel.bak") {
+		t.Fatal(".gitconfig.doppel.bak was not created")
+	}
+	bak := s.Read(".gitconfig.doppel.bak")
+	if !strings.Contains(bak, `path = ~/.gitconfig-work`) || !strings.Contains(bak, `path = ~/.gitconfig-oss`) {
+		t.Errorf("backup missing original includes:\n%s", bak)
+	}
+
+	globalCfg := s.Read(".gitconfig")
+	if strings.Contains(globalCfg, "includeIf") || strings.Contains(globalCfg, ".gitconfig-work") || strings.Contains(globalCfg, ".gitconfig-oss") {
+		t.Errorf("global config still contains old includes:\n%s", globalCfg)
+	}
+	if !strings.Contains(globalCfg, "index.gitconfig") {
+		t.Errorf("global config missing doppel index include:\n%s", globalCfg)
+	}
+
+	personal := loadAccount(t, s, "personal")
+	if personal.Name != "Jane Personal" || personal.Email != "jane@personal.dev" || !personal.Default {
+		t.Errorf("personal account = %+v", personal)
+	}
+
+	work := loadAccount(t, s, "work")
+	if work.Name != "Jane Work" || work.Email != "jane@work.com" || work.Default || !slices.Equal(work.Folders, []string{"~/work/"}) {
+		t.Errorf("work account = %+v", work)
+	}
+	if work.SigningKey != "~/.ssh/id_work.pub" || !work.SignCommits || !work.SignTags {
+		t.Errorf("work signing = %q, commits %v, tags %v", work.SigningKey, work.SignCommits, work.SignTags)
+	}
+	if work.AuthKey != "~/.ssh/id_work" {
+		t.Errorf("work auth = %q, want ~/.ssh/id_work", work.AuthKey)
+	}
+
+	oss := loadAccount(t, s, "oss")
+	if oss.Name != "Jane OSS" || oss.Email != "jane@oss.org" || oss.Default || !slices.Equal(oss.Folders, []string{"~/oss/"}) {
+		t.Errorf("oss account = %+v", oss)
+	}
+
+	workRepo := s.GitInit("work/proj")
+	if out := commitAndVerify(t, workRepo); !strings.Contains(out, `Good "git" signature for jane@work.com`) {
+		t.Errorf("work repo commit signature:\n%s", out)
+	}
+
+	ossRepo := s.GitInit("oss/lib")
+	if who := s.GitConfig(ossRepo, "user.email"); who != "jane@oss.org" {
+		t.Errorf("oss repo user.email = %q, want jane@oss.org", who)
+	}
+
+	otherRepo := s.GitInit("other/repo")
+	if who := s.GitConfig(otherRepo, "user.email"); who != "jane@personal.dev" {
+		t.Errorf("other repo user.email = %q, want jane@personal.dev", who)
+	}
+}
+
+func TestAddWizardMultiAccountImportDeclined(t *testing.T) {
+	s := newSandbox(t)
+	s.Write(".gitconfig-work", `[user]
+	name = Jane Work
+	email = jane@work.com
+`)
+	s.Write(".gitconfig", `[user]
+	name = Jane Personal
+	email = jane@personal.dev
+
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+`)
+
+	s.tty = true
+	s.stdin = script(
+		"n",
+		"custom",
+		"Custom User",
+		"custom@corp.com",
+		"",
+		"",
+		"~/custom",
+		"",
+		"",
+		"0",
+		"",
+	)
+	s.mustRun("add")
+
+	content := s.Read(".gitconfig")
+	if !strings.Contains(content, `path = ~/.gitconfig-work`) {
+		t.Errorf(".gitconfig should have kept old includeIf when declined:\n%s", content)
+	}
+
+	list, err := accounts.Load(s.Env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "custom" {
+		t.Errorf("loaded accounts = %v, want only [custom]", list)
+	}
+}
+
+func TestInitialImportHelper(t *testing.T) {
+	s := newSandbox(t)
+	s.Write(".gitconfig-work", `[user]
+	name = Jane Work
+	email = jane@work.com
+`)
+	s.Write(".gitconfig", `[user]
+	name = Jane Personal
+	email = jane@personal.dev
+
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+`)
+
+	s.tty = true
+	s.stdin = script("n")
+	a := s.newApp(s.Home)
+	imported, err := a.initialImport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported || !a.importDeclined {
+		t.Errorf("imported = %v, importDeclined = %v, want false, true", imported, a.importDeclined)
+	}
+
+	s.stdin = script("")
+	a = s.newApp(s.Home)
+	imported, err = a.initialImport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !imported {
+		t.Error("imported = false, want true")
+	}
+	list, err := accounts.Load(s.Env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Errorf("len(list) = %d, want 2", len(list))
+	}
+}

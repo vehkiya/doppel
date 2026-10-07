@@ -236,3 +236,55 @@ func TestSaveKeepsGeneratedKeysOnFailure(t *testing.T) {
 		t.Errorf("Save = %v", err)
 	}
 }
+
+func TestImport(t *testing.T) {
+	s, ctx, _ := newContext(t, nil)
+	s.Write(".gitconfig", `[user]
+	name = Alice
+	email = alice@example.com
+
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+`)
+	disc := &accounts.Discovered{
+		Accounts: []*accounts.DiscoveredAccount{
+			{
+				Account: &accounts.Account{ID: "personal", Name: "Alice", Email: "alice@example.com", Default: true, Hosts: []string{"github.com"}},
+				Source:  s.Path(".gitconfig"),
+			},
+			{
+				Account: &accounts.Account{ID: "work", Name: "Alice", Email: "alice@work.com", Folders: []string{"~/work/"}, Hosts: []string{"github.com"}},
+				Source:  s.Path(".gitconfig-work"),
+				Cleanups: []accounts.IncludeCleanup{
+					{
+						ConfigFile: s.Path(".gitconfig"),
+						Key:        "includeif.gitdir:~/work/.path",
+						Subsection: "gitdir:~/work/",
+						Path:       "~/.gitconfig-work",
+					},
+				},
+			},
+		},
+	}
+	ch, err := ops.Import(ctx, ops.ImportRequest{Discovered: disc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := ops.Save(ctx, ch, ops.SaveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Message != "Imported 2 accounts" {
+		t.Errorf("Message = %q, want 'Imported 2 accounts'", res.Message)
+	}
+	if !s.Exists(".gitconfig.doppel.bak") {
+		t.Error("Save did not create backup")
+	}
+	loaded, err := accounts.Load(s.Env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded %d accounts, want 2", len(loaded))
+	}
+}

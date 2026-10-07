@@ -44,6 +44,8 @@ type Change struct {
 	// Removed lists the accounts the change deletes. No other account file
 	// is ever deleted, apart from the old file of a renamed account.
 	Removed []*accounts.Account
+	// Cleanups lists includeIf directives to remove from Git config files.
+	Cleanups []accounts.IncludeCleanup
 	// NewKeys are keys to generate before saving.
 	NewKeys []NewKey
 	// Message says what the change does, for when it's done: "Added account work".
@@ -138,7 +140,7 @@ const (
 func stage(ctx Context, ch *Change, publicKey func(keys.Ref) (string, error), then finish) (*Result, error) {
 	p := plan.New(ctx.Env.StagingDir())
 	defer p.Close()
-	if err := store.Save(ctx.Env, p, ch.Accounts, store.Options{Removed: ch.Removed, PublicKey: publicKey}); err != nil {
+	if err := store.Save(ctx.Env, p, ch.Accounts, store.Options{Removed: ch.Removed, Cleanups: ch.Cleanups, PublicKey: publicKey}); err != nil {
 		return nil, err
 	}
 	res := &Result{Message: ch.Message, DryRun: then == preview, NewKeys: ch.NewKeys, Warnings: ch.Warnings, Notes: ch.Notes}

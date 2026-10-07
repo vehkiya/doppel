@@ -688,6 +688,53 @@ func onlyWriteFlags(fs *flag.FlagSet) bool {
 	return only
 }
 
+// renderDiscovered renders a summary card of discovered accounts.
+func renderDiscovered(disc *accounts.Discovered) string {
+	var b strings.Builder
+	for i, da := range disc.Accounts {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		idLine := ui.Title.Render(da.Account.ID)
+		if da.Account.Default {
+			idLine += " " + ui.Star.Render("★") + " " + ui.Dim.Render("(default)")
+		}
+		fmt.Fprintf(&b, "%s\n", idLine)
+		fmt.Fprintf(&b, "%s <%s>\n", da.Account.Name, da.Account.Email)
+		if len(da.Account.Folders) > 0 {
+			fmt.Fprintf(&b, "%s %s", ui.Label.Render("Repos:"), strings.Join(da.Account.Folders, ", "))
+		} else {
+			fmt.Fprintf(&b, "%s %s", ui.Label.Render("Repos:"), "outside every folder")
+		}
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ui.ColorPurple).
+		Padding(0, 1).Render(b.String())
+}
+
+// promptImport asks the user whether to import discovered accounts.
+func (a *app) promptImport(disc *accounts.Discovered) (bool, error) {
+	a.printf("\n%s %s\n%s\n\n",
+		ui.BadgeAccent.Render(" DOPPEL "),
+		ui.Title.Render("Import Git accounts"),
+		ui.Dim.Render("Existing multi-account setup detected in your Git configuration:"),
+	)
+	a.printf("%s\n\n", renderDiscovered(disc))
+	use := true
+	question := "Import these Git accounts into doppel?"
+	err := a.runForm(huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title(question).
+			Description("Account files will be created and imported includeIf directives backed up").
+			Affirmative("Yes, import accounts").
+			Negative("No, start fresh").
+			Value(&use),
+	)))
+	if err != nil {
+		return false, err
+	}
+	return use, nil
+}
+
 // addWithWizard adds an account by asking for each setting. With no
 // accounts yet, it offers to start from the identity in the global Git
 // config.
@@ -695,19 +742,34 @@ func (a *app) addWithWizard(id string, w writeFlags) (*ops.Result, error) {
 	return a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
 		start := &accounts.Account{ID: id, Hosts: []string{accounts.DefaultHost}}
 		if len(list) == 0 {
-			if found, source, ok := accounts.FromGlobal(a.env); ok {
-				use := true
-				question := fmt.Sprintf("Start from the identity in %s: %s <%s>?", a.env.Shorten(source), found.Name, found.Email)
-				if err := a.runForm(huh.NewForm(huh.NewGroup(
-					huh.NewConfirm().Title(question).
-						Description("Its name, email and SSH keys become your first account, the default").
-						Affirmative("Yes").Negative("No, start fresh").Value(&use),
-				))); err != nil {
-					return nil, err
+			if !a.importDeclined {
+				disc, err := accounts.Discover(a.env)
+				if err == nil && len(disc.Accounts) >= 2 {
+					use, err := a.promptImport(disc)
+					if err != nil {
+						return nil, err
+					}
+					if use {
+						return ops.Import(ctx, ops.ImportRequest{Discovered: disc})
+					}
+					a.importDeclined = true
 				}
-				if use {
-					found.ID = id
-					start = found
+			}
+			if !a.importDeclined {
+				if found, source, ok := accounts.FromGlobal(a.env); ok {
+					use := true
+					question := fmt.Sprintf("Start from the identity in %s: %s <%s>?", a.env.Shorten(source), found.Name, found.Email)
+					if err := a.runForm(huh.NewForm(huh.NewGroup(
+						huh.NewConfirm().Title(question).
+							Description("Its name, email and SSH keys become your first account, the default").
+							Affirmative("Yes").Negative("No, start fresh").Value(&use),
+					))); err != nil {
+						return nil, err
+					}
+					if use {
+						found.ID = id
+						start = found
+					}
 				}
 			}
 		}

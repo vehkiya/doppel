@@ -31,6 +31,9 @@ type Options struct {
 	// of no other account, apart from the old file of one that was renamed,
 	// so an account added meanwhile is never swept away.
 	Removed []*accounts.Account
+
+	// Cleanups lists includeIf directives to remove from Git config files.
+	Cleanups []accounts.IncludeCleanup
 }
 
 // Save plans every file change needed for list to be the whole set of
@@ -156,6 +159,12 @@ func stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options)
 			if err := p.Remove(a.File); err != nil {
 				return err
 			}
+		}
+	}
+
+	if len(opts.Cleanups) > 0 {
+		if err := CleanIncludes(env, p, opts.Cleanups); err != nil {
+			return err
 		}
 	}
 

@@ -107,3 +107,43 @@ func TestLockIsExclusive(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestSaveCleansIncludesAndBacksUp(t *testing.T) {
+	s := testenv.New(t)
+	s.Write(".gitconfig", `[user]
+	name = Alice
+	email = alice@example.com
+
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+`)
+	acc := newAccount("work")
+	acc.Folders = []string{"~/work/"}
+	cleanups := []accounts.IncludeCleanup{
+		{
+			ConfigFile: s.Path(".gitconfig"),
+			Key:        "includeif.gitdir:~/work/.path",
+			Subsection: "gitdir:~/work/",
+			Path:       "~/.gitconfig-work",
+		},
+	}
+	if err := saveAll(t, s, []*accounts.Account{acc}, Options{Cleanups: cleanups}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !s.Exists(".gitconfig.doppel.bak") {
+		t.Error("Save did not back up .gitconfig")
+	}
+	bak := s.Read(".gitconfig.doppel.bak")
+	if !strings.Contains(bak, `path = ~/.gitconfig-work`) {
+		t.Errorf("backup does not contain original include: %q", bak)
+	}
+
+	content := s.Read(".gitconfig")
+	if strings.Contains(content, "includeIf") || strings.Contains(content, ".gitconfig-work") {
+		t.Errorf("cleaned .gitconfig still contains includeIf:\n%s", content)
+	}
+	if !strings.Contains(content, "index.gitconfig") {
+		t.Errorf("cleaned .gitconfig does not contain doppel's include:\n%s", content)
+	}
+}
