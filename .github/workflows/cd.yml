@@ -55,7 +55,7 @@ jobs:
         uses: PaulHatch/semantic-version@4d6da96a9bc3116da3613309a11ff75fba58eb8d # v6.0.4
         with:
           change_path: "."
-          bump_each_commit: true
+          bump_each_commit: false
           tag_prefix: "v"
           major_pattern: "/!:|BREAKING CHANGE:/"
           minor_pattern: "/feat(\\(.+\\))?:/"
