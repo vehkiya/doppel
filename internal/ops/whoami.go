@@ -10,6 +10,7 @@ import (
 	"github.com/vehkiya/doppel/internal/git"
 	"github.com/vehkiya/doppel/internal/hosts"
 	"github.com/vehkiya/doppel/internal/paths"
+	"github.com/vehkiya/doppel/internal/store"
 )
 
 // Identity is which account applies at a path, and why.
@@ -52,6 +53,9 @@ type Identity struct {
 	// in a repo, only for a folder inside an enclosing repo whose account
 	// differs.
 	NewRepoID, NewRepoRule string
+
+	// StaleIndex reports whether doppel's index is missing or out of date.
+	StaleIndex bool
 }
 
 // Whoami says which account applies at path. In a repo it asks Git, so the
@@ -64,15 +68,24 @@ func Whoami(ctx Context, list []*accounts.Account, path string) (*Identity, erro
 	dir := filepath.Clean(path)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() { //nolint:gosec // the user's own path argument; only its type is read
 		if err != nil {
-			return outsideRepo(ctx, list, path), nil
+			id := outsideRepo(ctx, list, path)
+			id.StaleIndex = store.StaleIndex(ctx.Env, list)
+			return id, nil
 		}
 		dir = filepath.Dir(dir) // a file: describe the repo it's in
 	}
 	gitDir, err := git.Run(dir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
-		return outsideRepo(ctx, list, path), nil
+		id := outsideRepo(ctx, list, path)
+		id.StaleIndex = store.StaleIndex(ctx.Env, list)
+		return id, nil
 	}
-	return inRepo(ctx, list, dir, strings.TrimSpace(gitDir))
+	id, err := inRepo(ctx, list, dir, strings.TrimSpace(gitDir))
+	if err != nil {
+		return nil, err
+	}
+	id.StaleIndex = store.StaleIndex(ctx.Env, list)
+	return id, nil
 }
 
 func outsideRepo(ctx Context, list []*accounts.Account, path string) *Identity {

@@ -2,9 +2,11 @@ package store
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/git"
 	"github.com/vehkiya/doppel/internal/paths"
 )
 
@@ -58,4 +60,105 @@ func unquoteValue(v string) string {
 		return v
 	}
 	return strings.NewReplacer(`\\`, `\`, `\"`, `"`).Replace(v[1 : len(v)-1])
+}
+
+// StaleIndex reports whether index.gitconfig is missing or out of date with
+// respect to the account files: if index.gitconfig doesn't exist (when there
+// are accounts), was modified before accounts/ or any account file, or its
+// content doesn't match the current accounts.
+func StaleIndex(env *paths.Env, list []*accounts.Account) bool {
+	if len(list) == 0 {
+		return paths.FileExists(env.IndexPath())
+	}
+	indexInfo, err := os.Stat(env.IndexPath())
+	if err != nil {
+		return true
+	}
+	indexTime := indexInfo.ModTime()
+
+	if dirInfo, err := os.Stat(env.AccountsDir()); err == nil {
+		if dirInfo.ModTime().After(indexTime) {
+			return true
+		}
+	}
+	for _, a := range list {
+		if a.File != "" {
+			if fileInfo, err := os.Stat(a.File); err == nil {
+				if fileInfo.ModTime().After(indexTime) {
+					return true
+				}
+			}
+		}
+	}
+
+	cfg, err := git.ReadConfigFile(env.IndexPath())
+	if err != nil {
+		return true
+	}
+
+	def := accounts.Default(list)
+	var wantDef string
+	if def != nil {
+		wantDef = env.Shorten(env.AccountPath(def.ID))
+	}
+	haveDef := cfg["include.path"]
+	if wantDef == "" {
+		if len(haveDef) > 0 {
+			return true
+		}
+	} else {
+		if len(haveDef) != 1 || haveDef[0] != wantDef {
+			return true
+		}
+	}
+
+	rules := accounts.FolderRules(env, list)
+	condition := "gitdir:"
+	if env.CaseInsensitive() {
+		condition = "gitdir/i:"
+	}
+	includeIfCount := 0
+	for k := range cfg {
+		if strings.HasPrefix(k, "includeif.") && strings.HasSuffix(k, ".path") {
+			includeIfCount++
+		}
+	}
+	if includeIfCount != len(rules) {
+		return true
+	}
+	for _, r := range rules {
+		key := "includeif." + strings.ToLower(condition+r.Folder) + ".path"
+		have := cfg[key]
+		want := env.Shorten(env.AccountPath(r.ID))
+		if len(have) != 1 || have[0] != want {
+			return true
+		}
+	}
+
+	signersFile, configured, err := SignersFile(env)
+	if err == nil && !configured {
+		hasSigners := false
+		for _, a := range list {
+			if a.SigningKey != "" || len(a.Retired) > 0 {
+				hasSigners = true
+				break
+			}
+		}
+		haveSigners := cfg["gpg.ssh.allowedsignersfile"]
+		wantSigners := ""
+		if hasSigners {
+			wantSigners = env.Shorten(signersFile)
+		}
+		if wantSigners == "" {
+			if len(haveSigners) > 0 {
+				return true
+			}
+		} else {
+			if len(haveSigners) != 1 || haveSigners[0] != wantSigners {
+				return true
+			}
+		}
+	}
+
+	return false
 }

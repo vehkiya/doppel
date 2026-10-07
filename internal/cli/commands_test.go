@@ -125,6 +125,43 @@ func TestDefaultAccount(t *testing.T) {
 	}
 }
 
+func TestTwoDefaultsResolvedBySetDefault(t *testing.T) {
+	s := newSandbox(t)
+	s.addAccount("personal", "jane@personal.dev")
+	s.addAccount("work", "jane@acme.com")
+
+	// Manually mark both accounts as default (simulating a sync conflict from two machines).
+	s.Write(".config/doppel/accounts/work.gitconfig", s.Read(".config/doppel/accounts/work.gitconfig")+"[doppel]\n\tdefault = true\n")
+
+	// 1. doppel default (query) fails with clear error naming `doppel default <id>`.
+	code := s.run("default")
+	if code != 1 || !strings.Contains(s.stderr.String(), "accounts personal, work are all marked as the default; pick one with `doppel default <id>`") {
+		t.Errorf("default query with two defaults: code=%d, stderr:\n%s", code, s.stderr.String())
+	}
+	s.stderr.Reset()
+
+	// 2. doppel list warns about both defaults.
+	s.mustRun("list")
+	if !strings.Contains(s.stderr.String(), "accounts personal, work are all marked as the default; pick one with `doppel default <id>`") {
+		t.Errorf("list with two defaults didn't warn; stderr:\n%s", s.stderr.String())
+	}
+	s.stderr.Reset()
+
+	// 3. doppel doctor reports problem and suggests the fix.
+	code = s.run("doctor")
+	if code != 1 || !strings.Contains(s.stdout.String(), "Pick one with `doppel default <id>`") {
+		t.Errorf("doctor didn't name fix; stdout:\n%s", s.stdout.String())
+	}
+
+	// 4. doppel default work fixes it.
+	s.mustRun("default", "work")
+
+	// 5. Querying default now succeeds and prints work.
+	if got := strings.TrimSpace(s.mustRun("default")); got != "work" {
+		t.Errorf("default after fix = %q, want work", got)
+	}
+}
+
 func TestFailedRenameNeverLeavesAFolderWithoutItsAccount(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")

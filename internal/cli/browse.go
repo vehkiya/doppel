@@ -7,6 +7,7 @@ import (
 	"charm.land/huh/v2"
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/ops"
+	"github.com/vehkiya/doppel/internal/store"
 	"github.com/vehkiya/doppel/internal/tui"
 	"github.com/vehkiya/doppel/internal/ui"
 	"github.com/vehkiya/doppel/internal/update"
@@ -23,9 +24,12 @@ func (a *app) browse() int {
 		if err != nil {
 			return a.fail(err)
 		}
-		act, err := tui.Run(tui.Options{Env: a.env, Accounts: list, LoadKeyInfo: func() map[string]tui.KeyInfo { return a.keyInfo(list) },
+		act, err := tui.Run(tui.Options{
+			Env: a.env, Accounts: list, LoadKeyInfo: func() map[string]tui.KeyInfo { return a.keyInfo(list) },
 			Selected: selected, Status: status,
-			CheckUpdate: a.updateCheck()})
+			CheckUpdate: a.updateCheck(),
+			StaleIndex:  store.StaleIndex(a.env, list),
+		})
 		if err != nil {
 			return a.fail(err)
 		}

@@ -173,6 +173,8 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - `new_repo_account`: string, account a new repo created here would get (empty if none)
   - `new_repo_rule`: string, rule selecting new repo account (empty if none)
   - `login`: object or null, result of remote login check (`ok`, `skipped`, `label`, `detail`, `fix`)
+  - `stale_index`: boolean, true if doppel's index is missing or out of date
+- **R6.7 Stale index detection:** If doppel's index is missing or out of date (older than `accounts/` or any account file, or mismatched rules/default), `whoami` emits a warning suggesting `doppel doctor --fix`.
 
 ### R7. `doctor`
 
@@ -330,6 +332,12 @@ Paths follow `XDG_CONFIG_HOME`:
 ```
 
 **Account files are the source of truth.** `index.gitconfig` is generated entirely from them, so it can always be rebuilt. There's no hidden state file. Hand edits to account files are respected, and `git config --show-origin` explains any value.
+
+- **Multi-machine setups and syncing:**
+  - Account files (`accounts/<id>.gitconfig`) sync cleanly across machines (e.g. via dotfiles or Git).
+  - The generated `index.gitconfig` (which uses `gitdir/i:` on macOS vs. `gitdir:` on Linux), the `~/.gitconfig` include block, and `~/.ssh/allowed_signers` are machine-local and should not be synced.
+  - When account files arrive via sync, `doppel doctor --fix` regenerates `index.gitconfig` and updates `allowed_signers`. If forgotten, `whoami` and the browser detect the stale index and prompt the fix.
+  - If syncing introduces conflicting defaults, write commands refuse to proceed and prompt resolving it with `doppel default <id>`.
 
 ### 6.2 Account file
 
