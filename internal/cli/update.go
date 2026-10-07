@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/vehkiya/doppel/internal/ui"
 	"github.com/vehkiya/doppel/internal/update"
 	"github.com/vehkiya/doppel/internal/version"
 )
@@ -38,7 +39,9 @@ func (a *app) cmdUpdate(args []string) int {
 		return a.fail(err)
 	}
 	if installed != "" {
-		a.successf("Updated doppel to %s", installed)
+		updatedBadge := ui.BadgeOK.Render(" UPDATED ")
+		a.printf("\n%s Successfully updated doppel to %s\n\n", updatedBadge, installed)
+		a.printf("%s Restart doppel to apply the update.\n\n", ui.Accent.Render("➜"))
 	}
 	return 0
 }
