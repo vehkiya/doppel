@@ -9,6 +9,8 @@
 
 doppel only writes plain Git config, which Git applies by itself: it doesn't wrap `git`, and it doesn't need to be running. It's a sibling of [sshx](https://github.com/vehkiya/sshx), built with the [Charm](https://charm.sh) stack.
 
+![doppel TUI](assets/screenshot.png)
+
 ```console
 $ doppel whoami ~/projects/work/api
 Repo      ~/projects/work/api
