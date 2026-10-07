@@ -114,11 +114,10 @@ func SignCheck(key Ref, email, allowedSigners string) error {
 		return err
 	}
 
-	// Signing may ask for the key's passphrase, so it has no time limit.
-	sign := exec.Command("ssh-keygen", "-Y", "sign", "-n", "git", "-f", keyFile, msg) //nolint:gosec // fixed binary; arguments built by doppel
+	sign, finishSign := proc.Command(proc.Local, "ssh-keygen", "-Y", "sign", "-n", "git", "-f", keyFile, msg)
 	var stderr bytes.Buffer
 	sign.Stderr = &stderr
-	if err := sign.Run(); err != nil {
+	if err := finishSign(sign.Run()); err != nil {
 		return fmt.Errorf("couldn't sign: %s", lastLine(stderr.String(), err))
 	}
 

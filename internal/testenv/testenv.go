@@ -39,13 +39,19 @@ func New(t *testing.T) *Sandbox {
 		"GIT_CONFIG_GLOBAL", "GIT_DIR", "GIT_WORK_TREE", "GIT_SSH_COMMAND", "GIT_SSH",
 		"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CEILING_DIRECTORIES",
 		// Keep tests away from the developer's ssh-agent and passphrase dialogs.
-		"SSH_AUTH_SOCK", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+		"SSH_AUTH_SOCK",
 	} {
 		t.Setenv(key, "") // registers the original value for restoring
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)
 		}
 	}
+	falseBin, err := exec.LookPath("false")
+	if err != nil {
+		falseBin = "/bin/false"
+	}
+	t.Setenv("SSH_ASKPASS_REQUIRE", "force")
+	t.Setenv("SSH_ASKPASS", falseBin)
 	// gh reads its host and token from GH_* and GITHUB_* variables.
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")

@@ -46,7 +46,7 @@ func (a *app) cmdTest(args []string) int {
 			a.printf("\n")
 		}
 		a.printf("%s\n", ui.Accent.Render(acc.ID))
-		if ops.Test(ctx, acc, signers, !a.interactive, a.checkRow) {
+		if ops.Test(ctx, acc, signers, a.checkRow) {
 			failed = true
 		}
 		// Without a terminal, the rows above already name the command.
