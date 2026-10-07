@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/vehkiya/doppel/internal/accounts"
@@ -103,12 +104,19 @@ func (a *app) showResult(res *ops.Result) {
 		for _, k := range res.NewKeys {
 			a.notef("Dry run: would generate the %s %s", k.Purpose, a.env.Shorten(k.Path))
 		}
-		if len(res.Changes) == 0 {
+		var contentChanges []int
+		for i, c := range res.Changes {
+			if !c.Existed || !c.Exists || !bytes.Equal(c.Old, c.New) {
+				contentChanges = append(contentChanges, i)
+			}
+		}
+		if len(contentChanges) == 0 {
 			a.notef("Dry run: nothing would change.")
 			return
 		}
 		a.notef("Dry run: nothing was written. These changes would be made:")
-		for _, c := range res.Changes {
+		for _, i := range contentChanges {
+			c := res.Changes[i]
 			a.printf("\n")
 			ui.WriteDiff(a.stdout, a.env.Shorten(c.Path), c)
 		}
@@ -116,6 +124,9 @@ func (a *app) showResult(res *ops.Result) {
 	}
 	a.successf("%s", res.Message)
 	for _, c := range res.Changes {
+		if c.Existed && c.Exists && bytes.Equal(c.Old, c.New) {
+			continue
+		}
 		verb := "updated"
 		switch {
 		case !c.Existed:

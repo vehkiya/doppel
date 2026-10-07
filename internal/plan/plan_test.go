@@ -357,3 +357,38 @@ func TestStagingDirectoryIsPrivateAndGoesAwayWithThePlan(t *testing.T) {
 		t.Errorf("Close left the directories it made (err %v)", err)
 	}
 }
+
+func TestForceWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.conf")
+	write(t, path, "content\n")
+
+	p := newPlan(t)
+	if err := p.SetContent(path, []byte("content\n")); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := p.Changes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("expected 0 changes for identical content, got %d", len(changes))
+	}
+
+	if err := p.Force(path); err != nil {
+		t.Fatal(err)
+	}
+	changes, err = p.Changes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change after Force, got %d", len(changes))
+	}
+	if _, err := p.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot(t, dir); got["a.conf"] != "content\n" {
+		t.Errorf("Apply content = %q, want content\\n", got["a.conf"])
+	}
+}

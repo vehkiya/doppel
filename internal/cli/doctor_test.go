@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vehkiya/doppel/internal/accounts"
 	"github.com/vehkiya/doppel/internal/git"
@@ -185,5 +186,46 @@ func TestDoctorWithoutAccounts(t *testing.T) {
 	out := s.mustRun("doctor")
 	if !strings.Contains(out, "No accounts yet") || s.Exists(".gitconfig") || s.Exists(".config/doppel") {
 		t.Errorf("doctor without accounts:\n%s", out)
+	}
+}
+
+func TestDoctorFixStaleIndex(t *testing.T) {
+	s := doctorSandbox(t)
+
+	// Make index older than accounts (simulates account arriving via sync or edit).
+	past := time.Now().Add(-100 * time.Second)
+	indexPath := s.Path(".config/doppel/index.gitconfig")
+	if err := os.Chtimes(indexPath, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	// doctor warns about stale index.
+	out := s.mustRun("doctor")
+	if !strings.Contains(out, "doppel's files don't match the accounts: ~/.config/doppel/index.gitconfig") {
+		t.Errorf("doctor didn't warn about stale index:\n%s", out)
+	}
+
+	// doctor --fix brings index up to date even though content matches.
+	out = s.mustRun("doctor", "--fix")
+	if !strings.Contains(out, "Updated ~/.config/doppel/index.gitconfig") {
+		t.Errorf("doctor --fix didn't update index:\n%s", out)
+	}
+	if !strings.Contains(out, "No problems found") {
+		t.Errorf("doctor --fix didn't report clean state:\n%s", out)
+	}
+
+	// whoami reports fresh index.
+	s.run("whoami", "projects/work")
+	if strings.Contains(s.stderr.String(), "doppel's index is out of date") {
+		t.Errorf("whoami still warned after doctor --fix:\n%s", s.stderr.String())
+	}
+}
+
+func TestEditDoesNotStaleIndex(t *testing.T) {
+	s := doctorSandbox(t)
+	s.mustRun("edit", "work", "--email", "jane@new.com")
+	s.run("whoami", "projects/work")
+	if strings.Contains(s.stderr.String(), "doppel's index is out of date") {
+		t.Errorf("whoami warned about stale index after edit:\n%s", s.stderr.String())
 	}
 }

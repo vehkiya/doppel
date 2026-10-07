@@ -172,8 +172,31 @@ func stage(env *paths.Env, p *plan.Plan, list []*accounts.Account, opts Options)
 	if err != nil {
 		return err
 	}
-	if err := p.SetContent(env.IndexPath(), renderIndex(env, list, signers)); err != nil {
-		return err
+	if len(list) == 0 {
+		if err := p.Remove(env.IndexPath()); err != nil {
+			return err
+		}
+	} else {
+		if err := p.SetContent(env.IndexPath(), renderIndex(env, list, signers)); err != nil {
+			return err
+		}
+	}
+	stale := StaleIndex(env, list)
+	if !stale {
+		changes, err := p.Changes()
+		if err == nil {
+			for _, ch := range changes {
+				if env.FolderContains(env.AccountsDir()+"/", ch.Path) {
+					stale = true
+					break
+				}
+			}
+		}
+	}
+	if stale && len(list) > 0 {
+		if err := p.Force(env.IndexPath()); err != nil {
+			return err
+		}
 	}
 	return ensureInclude(env, p)
 }
