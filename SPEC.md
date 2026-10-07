@@ -280,7 +280,7 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 - **R10.1** `doppel update` installs the latest release over the running binary. `--check` only says whether there's a newer one; `--force` reinstalls even when up to date. It doesn't need Git, so it works even when Git is the problem.
 - **R10.2** It only installs a release whose `checksums.txt` has a valid Ed25519 signature (`checksums.txt.sig`) from a key built into doppel (`TrustedKeys`), and whose archive matches its checksum. An unsigned release, an unknown key, or a mismatched archive is refused.
 - **R10.3** The new binary replaces the old one atomically (a temporary file in the same folder, then a rename). Without permission to write there, doppel says to update with the tool that installed it, or with `sudo`.
-- **R10.4** The browser checks for a newer release in the background when it opens, at most every 6 hours (cached in the user cache directory). It shows a notice and enables `U` to update. Development builds don't check, and neither does anything with `DOPPEL_NO_UPDATE_CHECK` set. After updating, the browser closes and asks you to run doppel again.
+- **R10.4** Commands check for a newer release on startup, at most every 6 hours (cached in the user cache directory), and print a notice to stderr when an update is available. The browser checks in the background when it opens, shows a notice and enables `U` to update. Development builds don't check, and neither does anything with `DOPPEL_NO_UPDATE_CHECK` set. After updating, doppel displays an `UPDATED` badge and prompts to restart.
 
 ## 5. Command line
 

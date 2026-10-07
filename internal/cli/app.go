@@ -17,6 +17,7 @@ import (
 	"github.com/vehkiya/doppel/internal/keys"
 	"github.com/vehkiya/doppel/internal/paths"
 	"github.com/vehkiya/doppel/internal/ui"
+	"github.com/vehkiya/doppel/internal/update"
 	"github.com/vehkiya/doppel/internal/version"
 )
 
@@ -221,6 +222,8 @@ func (a *app) run(args []string) int {
 		return a.cmdComplete(args)
 	}
 
+	a.checkUpdateOnStartup()
+
 	handler, ok := a.commands()[cmd]
 	if !ok {
 		_, _ = fmt.Fprintf(a.stderr, "Unknown command %q. Run `doppel help` for the list of commands.\n", cmd)
@@ -230,6 +233,19 @@ func (a *app) run(args []string) int {
 		return a.fail(err)
 	}
 	return handler(args)
+}
+
+// checkUpdateOnStartup checks GitHub (cached for up to 6 hours) for a newer
+// release and notifies the user on stderr if one is available.
+func (a *app) checkUpdateOnStartup() {
+	if a.collectFlags != nil || !a.interactive || update.CheckDisabled(version.Version) {
+		return
+	}
+	latest, newer, err := update.LatestCached(version.Version)
+	if err != nil || !newer {
+		return
+	}
+	_, _ = fmt.Fprintf(a.stderr, "doppel %s is available (installed: %s). Run `doppel update` to install it.\n", latest, version.Version)
 }
 
 // commands maps each command that needs Git, and its aliases, to its handler.

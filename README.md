@@ -46,7 +46,7 @@ Login     ✓ github.com: logged in as jane-acme
   * `doppel test` logs in to each host and signs a test message.
   * `doppel doctor` finds anything that could make Git use the wrong account.
 * **Interactive or scripted:** an account browser and step-by-step wizards in a terminal; plain flags for scripts.
-* **Updates itself:** `doppel update` installs the latest release, but only one signed with doppel's release key. The browser says when a newer release is out.
+* **Updates itself:** `doppel update` installs the latest release, but only one signed with doppel's release key. doppel checks for updates on startup and notifies you when a newer release is out.
 * **Careful with your files:**
   * `--dry-run` shows every change as a diff.
   * Every write is atomic and keeps a backup.

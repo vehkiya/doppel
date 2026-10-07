@@ -56,6 +56,20 @@ var (
 	executablePath = currentExecutable
 )
 
+// SetReleasesURLForTest swaps releasesAPIURL for tests and returns a restore func.
+func SetReleasesURLForTest(url string) func() {
+	old := releasesAPIURL
+	releasesAPIURL = url
+	return func() { releasesAPIURL = old }
+}
+
+// SetExecutablePathForTest swaps executablePath for tests and returns a restore func.
+func SetExecutablePathForTest(fn func() (string, error)) func() {
+	old := executablePath
+	executablePath = fn
+	return func() { executablePath = old }
+}
+
 // Asset is one downloadable file in a release.
 type Asset struct {
 	Name               string `json:"name"`
