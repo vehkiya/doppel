@@ -34,6 +34,10 @@ type Identity struct {
 	// match the account files yet.
 	Rule string
 
+	Protocol         string
+	HTTPSUser        string
+	CredentialHelper string
+
 	// The values in effect, as Git reads them.
 	Name, Email           string
 	SSHCommand            string
@@ -93,6 +97,11 @@ func outsideRepo(ctx Context, list []*accounts.Account, path string) *Identity {
 	_, err := os.Stat(path) //nolint:gosec // the user's own path argument; only its existence is read
 	id := &Identity{Path: real, Exists: err == nil}
 	id.NewRepoID, id.NewRepoRule = folderRule(ctx, list, real)
+	if newAcc := accounts.Find(list, id.NewRepoID); newAcc != nil {
+		id.Protocol = string(newAcc.Protocol)
+		id.HTTPSUser = newAcc.EffectiveHTTPSUser()
+		id.CredentialHelper = newAcc.CredentialHelper
+	}
 	return id
 }
 
@@ -122,6 +131,9 @@ func inRepo(ctx Context, list []*accounts.Account, path, gitDir string) (*Identi
 			real = resolved
 		}
 		id.Rule = ruleFor(ctx, list, id.Account, real)
+		id.Protocol = string(id.Account.Protocol)
+		id.HTTPSUser = id.Account.EffectiveHTTPSUser()
+		id.CredentialHelper = id.Account.CredentialHelper
 	}
 	id.Name, id.Email = value(accounts.KeyName), value(accounts.KeyEmail)
 	id.SSHCommand = value(accounts.KeySSHCommand)
@@ -199,22 +211,46 @@ func isAccountFile(env *paths.Env, origin string) bool {
 	return env.SamePath(filepath.Dir(path), env.AccountsDir())
 }
 
-// RemoteLogin tries acc's auth key on the host of the repo's remote, without
-// letting anything ask: a passphrase prompt in whoami would get in the way.
-// ok is false when the repo has no remote. A remote that isn't SSH, which
-// doppel's keys don't cover, comes back as a skipped check naming its kind,
-// with the command that switches an HTTPS remote to SSH.
+// RemoteLogin tries acc's auth key or HTTPS credentials on the host of the repo's
+// remote, without letting anything ask: a passphrase prompt in whoami would get in
+// the way. ok is false when the repo has no remote.
 func RemoteLogin(ctx Context, acc *accounts.Account, repo string) (c Check, ok bool) {
 	remote, ok := hosts.MainRemote(repo)
 	if !ok || remote.FetchURL == "" {
 		return Check{}, false
 	}
+	if hosts.IsHTTP(remote.FetchURL) {
+		if !acc.AllowsHTTPS() {
+			return Check{
+				Skipped: true,
+				Detail:  "the remote uses " + hosts.Scheme(remote.FetchURL) + ", but account " + acc.ID + " is configured for SSH only",
+				Fix:     hosts.SwitchToSSH(remote, ""),
+			}, true
+		}
+		user := acc.EffectiveHTTPSUser()
+		detail := "using Git credential helper"
+		if user != "" {
+			detail = "configured for " + user
+		}
+		return Check{
+			OK:     true,
+			Label:  "HTTPS auth",
+			Detail: detail,
+		}, true
+	}
+
 	host := hosts.SSHHost(remote.FetchURL)
 	if host == "" {
 		return Check{
 			Skipped: true,
-			Detail:  "the remote uses " + hosts.Scheme(remote.FetchURL) + ", which doppel's SSH keys don't cover",
-			Fix:     hosts.SwitchToSSH(remote, ""),
+			Detail:  "the remote uses " + hosts.Scheme(remote.FetchURL) + ", which is not recognized",
+		}, true
+	}
+	if !acc.AllowsSSH() {
+		return Check{
+			Skipped: true,
+			Detail:  "the remote uses SSH, but account " + acc.ID + " is configured for HTTPS only",
+			Fix:     hosts.SwitchToHTTPS(remote, ""),
 		}, true
 	}
 	return Login(ctx, acc, host), true

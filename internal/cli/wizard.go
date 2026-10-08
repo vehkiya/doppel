@@ -32,6 +32,9 @@ const (
 // review read them, so they follow earlier answers even after going back.
 type answers struct {
 	ID, Name, Email      string
+	Protocol             string // "ssh", "https", "both"
+	HTTPSUser            string
+	CredentialHelper     string
 	Hosts, GitHubUser    string
 	Folders              string
 	Default              bool
@@ -161,9 +164,16 @@ func (a *app) accountWizard(list []*accounts.Account, acc *accounts.Account, isN
 func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew bool) (*answers, []step) {
 	ans := &answers{
 		ID: acc.ID, Name: acc.Name, Email: acc.Email,
-		Hosts: strings.Join(acc.Hosts, ", "), GitHubUser: acc.GitHubUser,
-		Folders: strings.Join(acc.Folders, ", "),
-		Save:    true,
+		Protocol:         string(acc.Protocol),
+		HTTPSUser:        acc.HTTPSUser,
+		CredentialHelper: acc.CredentialHelper,
+		Hosts:            strings.Join(acc.Hosts, ", "),
+		GitHubUser:       acc.GitHubUser,
+		Folders:          strings.Join(acc.Folders, ", "),
+		Save:             true,
+	}
+	if ans.Protocol == "" {
+		ans.Protocol = string(accounts.ProtocolSSH)
 	}
 	if ans.Hosts == "" {
 		ans.Hosts = accounts.DefaultHost
@@ -178,7 +188,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 	switch {
 	case acc.AuthKey != "":
 		ans.Auth = keyKeep
-	case isNew:
+	case isNew && ans.Protocol != string(accounts.ProtocolHTTPS):
 		ans.Auth = keyGenerate
 	default:
 		ans.Auth = keyNone
@@ -186,8 +196,10 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 	switch {
 	case acc.SigningKey != "":
 		ans.Signing = keyKeep
-	case isNew && ans.Auth != keyNone:
+	case isNew && ans.Auth != keyNone && ans.Protocol != string(accounts.ProtocolHTTPS):
 		ans.Signing = keyWithAuth
+	case isNew && ans.Protocol == string(accounts.ProtocolHTTPS):
+		ans.Signing = keyGenerate
 	default:
 		ans.Signing = keyNone
 	}
@@ -243,6 +255,12 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 			Affirmative("Yes").Negative("No").Value(&ans.Default))
 	}
 
+	protoOptions := []huh.Option[string]{
+		huh.NewOption("SSH (SSH keys)", string(accounts.ProtocolSSH)),
+		huh.NewOption("HTTPS (credential helper / token)", string(accounts.ProtocolHTTPS)),
+		huh.NewOption("Both (hybrid: SSH and HTTPS)", string(accounts.ProtocolBoth)),
+	}
+
 	steps := []step{
 		{group: func() *huh.Group { return huh.NewGroup(identity...).Title("Identity") }},
 		{group: func() *huh.Group {
@@ -261,6 +279,27 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 		{group: func() *huh.Group { return huh.NewGroup(where...).Title("Where it applies") }},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
+				huh.NewSelect[string]().Key("protocol").Title("Protocol").
+					Description("How Git connects to remote hosts").
+					Options(protoOptions...).
+					Value(&ans.Protocol).
+					Validate(forward(ans, func(p string) error {
+						if p == string(accounts.ProtocolHTTPS) && ans.Signing == keyWithAuth {
+							ans.Signing = keyGenerate
+						}
+						return nil
+					})),
+			).Title("Protocol")
+		}},
+		{group: func() *huh.Group {
+			return huh.NewGroup(
+				huh.NewInput().Key("https-user").Title("HTTPS username").
+					Description("Username for HTTPS auth (defaults to GitHub user if empty)").
+					Value(&ans.HTTPSUser).Validate(forward(ans, accounts.ValidateHTTPSUser)),
+			).Title("HTTPS")
+		}, hide: func() bool { return ans.Protocol == string(accounts.ProtocolSSH) }},
+		{group: func() *huh.Group {
+			return huh.NewGroup(
 				a.liveDescription(huh.NewSelect[string]().Key("auth").Title("Auth key").
 					Options(a.authOptions(acc, discovered)...).
 					Value(&ans.Auth).Validate(forward(ans, func(string) error { return a.checkAuth(ans, acc) })),
@@ -269,7 +308,7 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 							"Generate creates " + a.env.Shorten(keys.DefaultPath(sshDir, ans.accountID(acc), false))
 					}, &struct{ ID *string }{&ans.ID}),
 			).Title("Keys")
-		}},
+		}, hide: func() bool { return ans.Protocol == string(accounts.ProtocolHTTPS) }},
 		{group: func() *huh.Group {
 			return huh.NewGroup(
 				a.completePaths(ans, huh.NewInput().Key("auth-path").Title("Auth key file").
@@ -278,8 +317,11 @@ func (a *app) wizardSteps(list []*accounts.Account, acc *accounts.Account, isNew
 					Validate(forward(ans, a.keyPathValidator(false))),
 					"auth-path", &ans.AuthPath, a.keySuggestions),
 			).Title("Keys")
-		}, hide: func() bool { return ans.Auth != keyPathEtc }},
+		}, hide: func() bool { return ans.Protocol == string(accounts.ProtocolHTTPS) || ans.Auth != keyPathEtc }},
 		{group: func() *huh.Group {
+			if ans.Protocol == string(accounts.ProtocolHTTPS) && ans.Signing == keyWithAuth {
+				ans.Signing = keyGenerate
+			}
 			return huh.NewGroup(
 				a.liveDescription(huh.NewSelect[string]().Key("signing").Title("Signing").
 					Options(a.signingOptions(acc, discovered)...).
@@ -399,6 +441,9 @@ func (a *app) signingOptions(acc *accounts.Account, discovered []keys.Ref) []huh
 
 // checkAuth refuses an auth choice that doesn't fit the other answers.
 func (a *app) checkAuth(ans *answers, acc *accounts.Account) error {
+	if ans.Protocol == string(accounts.ProtocolHTTPS) {
+		return nil
+	}
 	if ans.Auth == keyGenerate {
 		return a.checkGenerate(keys.DefaultPath(filepath.Join(a.env.Home, ".ssh"), ans.accountID(acc), false))
 	}
@@ -409,7 +454,7 @@ func (a *app) checkAuth(ans *answers, acc *accounts.Account) error {
 func (a *app) checkSigning(ans *answers, acc *accounts.Account) error {
 	switch ans.Signing {
 	case keyWithAuth:
-		if ans.Auth == keyNone {
+		if ans.Protocol == string(accounts.ProtocolHTTPS) || ans.Auth == keyNone {
 			return errors.New("there's no auth key to sign with: pick another key, or go back and choose one")
 		}
 	case keyGenerate:
@@ -456,8 +501,9 @@ func (a *app) checkAnswers(ans *answers, acc *accounts.Account, anyGitHub func()
 		{"Git hosts", true, func() error { return checkHosts(ans.Hosts) }},
 		{"GitHub username", anyGitHub(), func() error { return accounts.ValidateGitHubUser(ans.GitHubUser) }},
 		{"Folders", true, func() error { return a.checkFolders(ans.Folders) }},
-		{"Auth key", true, func() error { return a.checkAuth(ans, acc) }},
-		{"Auth key file", ans.Auth == keyPathEtc, func() error { return a.keyPathValidator(false)(ans.AuthPath) }},
+		{"HTTPS username", ans.Protocol != string(accounts.ProtocolSSH), func() error { return accounts.ValidateHTTPSUser(ans.HTTPSUser) }},
+		{"Auth key", ans.Protocol != string(accounts.ProtocolHTTPS), func() error { return a.checkAuth(ans, acc) }},
+		{"Auth key file", ans.Protocol != string(accounts.ProtocolHTTPS) && ans.Auth == keyPathEtc, func() error { return a.keyPathValidator(false)(ans.AuthPath) }},
 		{"Signing", true, func() error { return a.checkSigning(ans, acc) }},
 		{"Signing key file", ans.Signing == keyPathEtc, func() error { return a.keyPathValidator(true)(ans.SigningPath) }},
 	}
@@ -490,6 +536,9 @@ func (a *app) keyPathValidator(signing bool) func(string) error {
 func (a *app) addRequest(ans *answers, start *accounts.Account) ops.AddRequest {
 	acc := *start
 	acc.ID, acc.Name, acc.Email = a.answeredIdentity(ans, start)
+	acc.Protocol = accounts.Protocol(cmpOr(ans.Protocol, string(accounts.ProtocolSSH)))
+	acc.HTTPSUser = strings.TrimSpace(ans.HTTPSUser)
+	acc.CredentialHelper = strings.TrimSpace(ans.CredentialHelper)
 	acc.Hosts = answeredHosts(ans)
 	if user, ok := a.answeredGitHubUser(ans); ok {
 		acc.GitHubUser = user
@@ -502,9 +551,13 @@ func (a *app) addRequest(ans *answers, start *accounts.Account) ops.AddRequest {
 func (a *app) editRequest(ans *answers, acc *accounts.Account) ops.EditRequest {
 	_, name, email := a.answeredIdentity(ans, acc)
 	folders, makeDefault := splitList(ans.Folders), ans.Default
+	proto := accounts.Protocol(cmpOr(ans.Protocol, string(accounts.ProtocolSSH)))
+	httpsUser := strings.TrimSpace(ans.HTTPSUser)
+	credHelper := cmpOr(strings.TrimSpace(ans.CredentialHelper), acc.CredentialHelper)
 	req := ops.EditRequest{
 		ID: acc.ID, Name: &name, Email: &email, Hosts: answeredHosts(ans),
 		Folders: &folders, Default: &makeDefault, Keys: a.answeredKeys(ans),
+		Protocol: &proto, HTTPSUser: &httpsUser, CredentialHelper: &credHelper,
 	}
 	if user, ok := a.answeredGitHubUser(ans); ok {
 		req.GitHubUser = &user
@@ -545,16 +598,21 @@ func (a *app) answeredKeys(ans *answers) ops.KeyChanges {
 		}
 		return a.env.Shorten(choice)
 	}
-	switch ans.Auth {
-	case keyKeep:
-	case keyGenerate:
-		ch.GenerateAuth = true
-	case keyNone:
+	if ans.Protocol == string(accounts.ProtocolHTTPS) {
 		none := ""
 		ch.Auth = &none
-	default:
-		path := keyFile(ans.Auth, ans.AuthPath)
-		ch.Auth = &path
+	} else {
+		switch ans.Auth {
+		case keyKeep:
+		case keyGenerate:
+			ch.GenerateAuth = true
+		case keyNone:
+			none := ""
+			ch.Auth = &none
+		default:
+			path := keyFile(ans.Auth, ans.AuthPath)
+			ch.Auth = &path
+		}
 	}
 	switch ans.Signing {
 	case keyKeep:
@@ -593,6 +651,7 @@ func (a *app) review(ans *answers, acc *accounts.Account) string {
 		}
 		return a.env.Shorten(choice)
 	}
+	proto := cmpOr(ans.Protocol, string(accounts.ProtocolSSH))
 	auth := cmpOr(describe(ans.Auth, ans.AuthPath, acc.AuthKey.Display(), false), "ssh's own keys")
 	signing := describe(ans.Signing, ans.SigningPath, acc.SigningKey.Display(), true)
 	switch {
@@ -613,14 +672,25 @@ func (a *app) review(ans *answers, acc *accounts.Account) string {
 		{"Account", id},
 		{"Identity", cmpOr(strings.TrimSpace(ans.Name), acc.Name) + " <" + cmpOr(strings.TrimSpace(ans.Email), acc.Email) + ">"},
 		{"Hosts", strings.Join(splitList(ans.Hosts), ", ")},
-		{"Folders", cmpOr(strings.Join(splitList(ans.Folders), ", "), "none")},
-		{"Default", defaultNote},
-		{"Auth key", auth},
-		{"Signing", signing},
 	}
 	if strings.TrimSpace(ans.GitHubUser) != "" {
-		rows = append(rows[:3], append([][2]string{{"GitHub", strings.TrimSpace(ans.GitHubUser)}}, rows[3:]...)...)
+		rows = append(rows, [2]string{"GitHub", strings.TrimSpace(ans.GitHubUser)})
 	}
+	rows = append(rows,
+		[2]string{"Folders", cmpOr(strings.Join(splitList(ans.Folders), ", "), "none")},
+		[2]string{"Default", defaultNote},
+		[2]string{"Protocol", proto},
+	)
+	if proto != string(accounts.ProtocolSSH) && strings.TrimSpace(ans.HTTPSUser) != "" {
+		rows = append(rows, [2]string{"HTTPS user", strings.TrimSpace(ans.HTTPSUser)})
+	}
+	if strings.TrimSpace(ans.CredentialHelper) != "" {
+		rows = append(rows, [2]string{"Helper", strings.TrimSpace(ans.CredentialHelper)})
+	}
+	if proto != string(accounts.ProtocolHTTPS) {
+		rows = append(rows, [2]string{"Auth key", auth})
+	}
+	rows = append(rows, [2]string{"Signing", signing})
 	var b strings.Builder
 	for _, r := range rows {
 		fmt.Fprintf(&b, "%s %s\n", ui.Label.Width(10).Render(r[0]), r[1])

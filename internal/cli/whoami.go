@@ -14,24 +14,27 @@ const whoamiUsage = "doppel whoami [path] [--offline] [--json]"
 
 // whoamiJSON is the machine-readable representation of identity for `doppel whoami --json`.
 type whoamiJSON struct {
-	InRepo         bool             `json:"in_repo"`
-	Repo           string           `json:"repo"`
-	Path           string           `json:"path"`
-	Exists         bool             `json:"exists"`
-	Account        string           `json:"account"`
-	Rule           string           `json:"rule"`
-	Name           string           `json:"name"`
-	Email          string           `json:"email"`
-	AuthKey        string           `json:"auth_key"`
-	SSHCommand     string           `json:"ssh_command"`
-	SigningKey     string           `json:"signing_key"`
-	SignCommits    bool             `json:"sign_commits"`
-	SignTags       bool             `json:"sign_tags"`
-	Overrides      []string         `json:"overrides"`
-	NewRepoAccount string           `json:"new_repo_account"`
-	NewRepoRule    string           `json:"new_repo_rule"`
-	Login          *whoamiLoginJSON `json:"login"`
-	StaleIndex     bool             `json:"stale_index"`
+	InRepo           bool             `json:"in_repo"`
+	Repo             string           `json:"repo"`
+	Path             string           `json:"path"`
+	Exists           bool             `json:"exists"`
+	Account          string           `json:"account"`
+	Rule             string           `json:"rule"`
+	Protocol         string           `json:"protocol,omitempty"`
+	HTTPSUser        string           `json:"https_user,omitempty"`
+	CredentialHelper string           `json:"credential_helper,omitempty"`
+	Name             string           `json:"name"`
+	Email            string           `json:"email"`
+	AuthKey          string           `json:"auth_key"`
+	SSHCommand       string           `json:"ssh_command"`
+	SigningKey       string           `json:"signing_key"`
+	SignCommits      bool             `json:"sign_commits"`
+	SignTags         bool             `json:"sign_tags"`
+	Overrides        []string         `json:"overrides"`
+	NewRepoAccount   string           `json:"new_repo_account"`
+	NewRepoRule      string           `json:"new_repo_rule"`
+	Login            *whoamiLoginJSON `json:"login"`
+	StaleIndex       bool             `json:"stale_index"`
 }
 
 type whoamiLoginJSON struct {
@@ -93,25 +96,35 @@ func (a *app) cmdWhoami(args []string) int {
 		if id.UsesAccountKey && id.Account != nil {
 			authKey = id.Account.AuthKey.String()
 		}
+		proto := id.Protocol
+		if proto == "" && id.Account != nil {
+			proto = string(id.Account.Protocol)
+			if proto == "" {
+				proto = string(accounts.ProtocolSSH)
+			}
+		}
 		return a.printJSON(whoamiJSON{
-			InRepo:         id.InRepo,
-			Repo:           id.Repo,
-			Path:           id.Path,
-			Exists:         id.Exists,
-			Account:        id.AccountID,
-			Rule:           id.Rule,
-			Name:           id.Name,
-			Email:          id.Email,
-			AuthKey:        authKey,
-			SSHCommand:     id.SSHCommand,
-			SigningKey:     id.SigningKey,
-			SignCommits:    id.SignCommits,
-			SignTags:       id.SignTags,
-			Overrides:      overrides,
-			NewRepoAccount: id.NewRepoID,
-			NewRepoRule:    id.NewRepoRule,
-			Login:          loginJSON,
-			StaleIndex:     id.StaleIndex,
+			InRepo:           id.InRepo,
+			Repo:             id.Repo,
+			Path:             id.Path,
+			Exists:           id.Exists,
+			Account:          id.AccountID,
+			Rule:             id.Rule,
+			Protocol:         proto,
+			HTTPSUser:        id.HTTPSUser,
+			CredentialHelper: id.CredentialHelper,
+			Name:             id.Name,
+			Email:            id.Email,
+			AuthKey:          authKey,
+			SSHCommand:       id.SSHCommand,
+			SigningKey:       id.SigningKey,
+			SignCommits:      id.SignCommits,
+			SignTags:         id.SignTags,
+			Overrides:        overrides,
+			NewRepoAccount:   id.NewRepoID,
+			NewRepoRule:      id.NewRepoRule,
+			Login:            loginJSON,
+			StaleIndex:       id.StaleIndex,
 		})
 	}
 	if !id.InRepo {
@@ -143,14 +156,30 @@ func (a *app) cmdWhoami(args []string) int {
 	}
 	a.row("Name", id.Name)
 	a.row("Email", id.Email)
-	switch {
-	case id.UsesAccountKey:
-		key := id.Account.AuthKey
-		a.row("Auth key", key.Display()+ui.Dim.Render(" ("+strings.Join(ops.KeyStatus(ctx, key), ", ")+")"))
-	case id.SSHCommand == "ssh" || id.SSHCommand == "":
-		a.row("Auth key", "your default SSH keys")
-	default:
-		a.row("SSH", id.SSHCommand)
+	if id.Account != nil && id.Account.Protocol == accounts.ProtocolHTTPS {
+		authDesc := "HTTPS"
+		if u := id.Account.EffectiveHTTPSUser(); u != "" {
+			authDesc += " (" + u + ")"
+		}
+		a.row("Auth", authDesc)
+	} else {
+		switch {
+		case id.UsesAccountKey:
+			key := id.Account.AuthKey
+			a.row("Auth key", key.Display()+ui.Dim.Render(" ("+strings.Join(ops.KeyStatus(ctx, key), ", ")+")"))
+		case id.SSHCommand == "ssh" || id.SSHCommand == "":
+			a.row("Auth key", "your default SSH keys")
+		default:
+			a.row("SSH", id.SSHCommand)
+		}
+		if id.Account != nil && id.Account.Protocol == accounts.ProtocolBoth {
+			if u := id.Account.EffectiveHTTPSUser(); u != "" {
+				a.row("HTTPS user", u)
+			}
+		}
+	}
+	if id.Account != nil && id.Account.CredentialHelper != "" {
+		a.row("Helper", id.Account.CredentialHelper)
 	}
 	if id.SignCommits || id.SignTags {
 		a.row("Signing", fmt.Sprintf("%s · %s", accounts.SigningScope(id.SignCommits, id.SignTags), id.SigningKey))
@@ -164,7 +193,11 @@ func (a *app) cmdWhoami(args []string) int {
 			case login.Skipped:
 				a.row("Login", ui.Dim.Render(login.Detail))
 				if login.Fix != "" {
-					a.row("", ui.Dim.Render("↳ switch it to SSH: ")+login.Fix)
+					prefix := "↳ switch it to SSH: "
+					if id.Account.Protocol == accounts.ProtocolHTTPS {
+						prefix = "↳ switch it to HTTPS: "
+					}
+					a.row("", ui.Dim.Render(prefix)+login.Fix)
 				}
 			case login.OK:
 				a.row("Login", ui.OK.Render("✓")+" "+login.Label+": "+login.Detail)

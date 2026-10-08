@@ -44,13 +44,14 @@ var commandSummaries = map[string]string{
 
 // What a word completes to.
 const (
-	argNone    = ""
-	argAccount = "account"
-	argFolder  = "folder" // a folder on disk
-	argBound   = "bound"  // a folder bound to an account
-	argFile    = "file"
-	argHost    = "host"
-	argShell   = "shell"
+	argNone     = ""
+	argAccount  = "account"
+	argFolder   = "folder" // a folder on disk
+	argBound    = "bound"  // a folder bound to an account
+	argFile     = "file"
+	argHost     = "host"
+	argShell    = "shell"
+	argProtocol = "protocol"
 )
 
 // positional says what a command's nth positional argument is.
@@ -85,6 +86,7 @@ var flagValues = map[string]string{
 	"auth-key":    argFile,
 	"signing-key": argFile,
 	"host":        argHost,
+	"protocol":    argProtocol,
 }
 
 // cmdCompletion prints the completion script for a shell.
@@ -176,6 +178,8 @@ func (a *app) values(kind string) ([]string, string) {
 		return nil, "files"
 	case argShell:
 		return []string{"zsh", "bash", "fish"}, "words"
+	case argProtocol:
+		return []string{"ssh", "https", "both"}, "words"
 	}
 	list, err := accounts.Load(a.env)
 	if err != nil {

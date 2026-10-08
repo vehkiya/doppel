@@ -67,8 +67,11 @@ func keyChangesFromFlags(fs *flag.FlagSet, k keyFlags) (ops.KeyChanges, error) {
 // keySummary describes an account's keys in a few words, for ls.
 func keySummary(acc *accounts.Account) string {
 	var parts []string
-	if acc.AuthKey != "" {
+	if acc.AllowsSSH() && acc.AuthKey != "" {
 		parts = append(parts, "auth")
+	}
+	if acc.AllowsHTTPS() {
+		parts = append(parts, "https")
 	}
 	if acc.SigningKey != "" {
 		parts = append(parts, "signing")

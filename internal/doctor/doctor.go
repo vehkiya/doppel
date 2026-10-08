@@ -207,7 +207,9 @@ func (c *checker) files() {
 // account checks one account's keys, folders and SSH config.
 func (c *checker) account(acc *accounts.Account) {
 	env := c.Env
-	if acc.AuthKey == "" {
+	if acc.Protocol == accounts.ProtocolHTTPS {
+		c.ok("Uses HTTPS for Git remotes")
+	} else if acc.AuthKey == "" {
 		if others, host := keylessNeighbours(acc, c.Accounts); len(others) > 0 {
 			c.problem("Give each account a key of its own: doppel edit <id> --generate-auth-key",
 				"%s and %s both log in to %s with ssh's own keys, so they log in as the same user", acc.ID, strings.Join(others, ", "), host)
@@ -264,17 +266,36 @@ func (c *checker) account(acc *accounts.Account) {
 		}
 	}
 
-	repos := httpsRepos(env, acc.Folders)
-	for i, r := range repos {
-		if i == maxHTTPSRepos {
-			c.warn("Switch these first, then run doctor again to see the rest", "…and %s in its folders use HTTPS", Plural(len(repos)-i, "more repo"))
-			break
+	if !acc.AllowsHTTPS() {
+		repos := httpsRepos(env, acc.Folders)
+		for i, r := range repos {
+			if i == maxHTTPSRepos {
+				c.warn("Switch these first, then run doctor again to see the rest", "…and %s in its folders use HTTPS", Plural(len(repos)-i, "more repo"))
+				break
+			}
+			fix := "Switch it to SSH: " + r.fix
+			if r.fix == "" {
+				fix = "Switch it to SSH: git -C " + r.dir + " remote set-url <remote> git@<host>:<owner>/<repo>.git"
+			}
+			c.warn(fix, "%s fetches over HTTPS, which doppel's keys don't cover", r.dir)
 		}
-		fix := "Switch it to SSH: " + r.fix
-		if r.fix == "" {
-			fix = "Switch it to SSH: git -C " + r.dir + " remote set-url <remote> git@<host>:<owner>/<repo>.git"
+	} else if !acc.AllowsSSH() {
+		repos := sshRepos(env, acc.Folders)
+		for i, r := range repos {
+			if i == maxHTTPSRepos {
+				c.warn("Switch these first, then run doctor again to see the rest", "…and %s in its folders use SSH", Plural(len(repos)-i, "more repo"))
+				break
+			}
+			fix := "Switch it to HTTPS: " + r.fix
+			if r.fix == "" {
+				fix = "Switch it to HTTPS: git -C " + r.dir + " remote set-url <remote> https://<host>/<owner>/<repo>.git"
+			}
+			c.warn(fix, "%s fetches over SSH, but %s is configured for HTTPS only", r.dir, acc.ID)
 		}
-		c.warn(fix, "%s fetches over HTTPS, which doppel's keys don't cover", r.dir)
+	}
+
+	if acc.AllowsHTTPS() && acc.EffectiveHTTPSUser() == "" {
+		c.note("Set its HTTPS user (doppel edit %s --https-user <user>) so Git credential helper knows which user to use", acc.ID)
 	}
 
 	if acc.GitHubUser == "" && c.GitHub.Any(acc.Hosts) {
@@ -377,7 +398,7 @@ func keylessNeighbours(acc *accounts.Account, list []*accounts.Account) ([]strin
 			after = true
 			continue
 		}
-		if !after || other.AuthKey != "" {
+		if !after || other.AuthKey != "" || !other.AllowsSSH() {
 			continue
 		}
 		if h := accounts.SharedHost(acc, other); h != "" {
@@ -396,7 +417,7 @@ func (c *checker) sharedAuthKey(acc *accounts.Account) (string, string) {
 			after = true
 			continue
 		}
-		if !after {
+		if !after || !other.AllowsSSH() {
 			continue
 		}
 		if host := accounts.SharedAuthKey(c.Env, acc, other); host != "" {
@@ -458,6 +479,64 @@ func httpsRemotes(env *paths.Env, dir string) (repo httpsRepo, ok bool) {
 		}
 		ok = true
 		if fix := hosts.SwitchToSSH(r, repo.dir); fix != "" {
+			fixes = append(fixes, fix)
+		}
+	}
+	repo.fix = strings.Join(fixes, " && ")
+	return repo, ok
+}
+
+// sshRepo is a repo with a remote over SSH, and the command that
+// switches its remotes to HTTPS ("" when doppel can't work it out).
+type sshRepo struct{ dir, fix string }
+
+// sshRepos finds repos in folders with a remote over SSH. It looks three
+// levels deep and skips hidden and dependency folders, so big trees stay quick.
+func sshRepos(env *paths.Env, folders []string) []sshRepo {
+	var found []sshRepo
+	for _, f := range folders {
+		visited := 0
+		var walk func(dir string, depth int)
+		walk = func(dir string, depth int) {
+			if visited >= 2000 || depth > 3 {
+				return
+			}
+			visited++
+			if paths.FileExists(filepath.Join(dir, ".git")) {
+				if r, ok := sshRemotes(env, dir); ok {
+					found = append(found, r)
+				}
+				return
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return
+			}
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() && !strings.HasPrefix(name, ".") && name != "node_modules" && name != "vendor" {
+					walk(filepath.Join(dir, name), depth+1)
+				}
+			}
+		}
+		walk(strings.TrimSuffix(env.Expand(f), "/"), 0)
+	}
+	return found
+}
+
+// sshRemotes checks a repo's remotes. ok is true when one uses SSH.
+func sshRemotes(env *paths.Env, dir string) (repo sshRepo, ok bool) {
+	repo.dir = env.Shorten(dir)
+	var fixes []string
+	for _, r := range hosts.Remotes(dir) {
+		if hosts.IsHTTP(r.FetchURL) && hosts.IsHTTP(r.PushURL) {
+			continue
+		}
+		if hosts.SSHHost(r.FetchURL) == "" && hosts.SSHHost(r.PushURL) == "" {
+			continue
+		}
+		ok = true
+		if fix := hosts.SwitchToHTTPS(r, repo.dir); fix != "" {
 			fixes = append(fixes, fix)
 		}
 	}

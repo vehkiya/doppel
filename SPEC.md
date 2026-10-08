@@ -14,6 +14,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 **Goals (v1)**
 - Define accounts and bind folders to them, with nested folders resolved predictably.
+- Support SSH, HTTPS (via Git credential helpers), and hybrid (both) account configurations.
 - Set up an auth key and an optional signing key per account, generating keys when needed.
 - Upload keys to GitHub, and give step-by-step manual instructions for every other host.
 - Explain which account applies in any folder, and why.
@@ -21,7 +22,7 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 - Never damage existing config or keys.
 
 **Non-goals (v1)**
-- HTTPS remotes and tokens (credential helpers). `doctor` reports HTTPS remotes it finds but doesn't change them.
+- Storing plain-text passwords or personal access tokens. Secrets are managed exclusively by Git credential helpers (`osxkeychain`, `manager`, `gh auth git-credential`, `libsecret`).
 - Managing `~/.ssh/config` hosts. That's sshx's job.
 - GPG signing keys.
 - GitHub Enterprise Server, and automatic uploads to GitLab, Gitea, Forgejo and others. Those hosts are covered by `export`.
@@ -32,11 +33,12 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 | Term | Meaning |
 | :--- | :--- |
-| **Account** | A named identity: commit name and email, the hosts it's used on, an optional GitHub username, an auth key, an optional signing key, and its folders. The ID is short and lowercase (`work`, `personal`). |
+| **Account** | A named identity: commit name and email, protocol (`ssh`, `https`, or `both`), optional HTTPS username and credential helper override, the hosts it's used on, an optional GitHub username, an auth key, an optional signing key, and its folders. The ID is short and lowercase (`work`, `personal`). |
 | **Default account** | The account used for repos outside every bound folder. There's at most one; the first account created becomes the default. |
 | **Folder** | A directory bound to one account. It applies to every repo whose `.git` directory is inside it, at any depth. |
-| **Auth key** | The SSH key used to fetch and push. One per account, shared by all of the account's hosts. |
-| **Signing key** | The SSH key used to sign commits and tags. It can be none, the same as the auth key, or a separate key. |
+| **Protocol** | How the account interacts with remotes: `ssh` (SSH keys), `https` (Git credential helper), or `both` (hybrid). |
+| **Auth key** | The SSH key used to fetch and push over SSH. One per account, shared by all of the account's hosts. Omitted for HTTPS-only accounts. |
+| **Signing key** | The SSH key used to sign commits and tags. It can be none, the same as the auth key (if SSH is enabled), or a separate key. Commits can be signed with SSH keys regardless of transport protocol. |
 
 ## 4. Requirements
 
@@ -151,8 +153,8 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
 
 - **R6.1** Works in any folder, or on a path argument, and shows:
   - the account in effect, and the folder rule (or default) that selected it
-  - the effective name, email, auth key and signing key, with whether signing is on
-  - the login check result for the repo's remote host. For an HTTPS remote, which the SSH keys don't cover, it gives the `git remote set-url` command that switches it to SSH instead.
+  - the effective name, email, auth key / HTTPS auth, and signing key, with whether signing is on
+  - the login check result for the repo's remote host. If the remote's protocol doesn't match the account's allowed protocols (an HTTPS remote for an SSH-only account, or an SSH remote for an HTTPS-only account), it gives the `git remote set-url` command that switches it to the matching protocol.
 - **R6.2** It asks Git which account applies (each account file carries `doppel.account`), so the result always matches what Git will actually do. Where doppel has to match folders itself (R6.4, and to name the rule that applied), it uses the same ordered rules the index is generated from (`accounts.FolderRules` and `accounts.MatchFolder`), so the two can't disagree.
 - **R6.3** It warns when a value in effect doesn't come from doppel, for example a `--local` override or a global setting placed after doppel's include. It shows where each value comes from, using `git config --show-origin`.
 - **R6.4** Outside any repo, it shows which account a repo created there would get. Git can only answer this for an existing repo, so here doppel applies the same folder rules itself.
@@ -166,9 +168,12 @@ It's a sibling of [sshx](https://github.com/vehkiya/sshx): the same stack, look 
   - `exists`: boolean, whether the path exists
   - `account`: string, ID of the applying account (empty if none)
   - `rule`: string, rule selecting the account (`folder <path>`, `default account`, `matched by Git`, or empty)
+  - `protocol`: string, protocol of the account (`ssh`, `https`, `both`)
+  - `https_user`: string, username for Git credential helper (if applicable)
+  - `credential_helper`: string, credential helper override (if configured)
   - `name`: string, effective Git `user.name`
   - `email`: string, effective Git `user.email`
-  - `auth_key`: string, effective auth key reference (empty if using default SSH keys)
+  - `auth_key`: string, effective auth key reference (empty if using default SSH keys or HTTPS)
   - `ssh_command`: string, effective `core.sshCommand`
   - `signing_key`: string, effective `user.signingkey` (empty if none)
   - `sign_commits`: boolean, effective `commit.gpgsign`
@@ -195,27 +200,30 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 
 **Git config**
 - The global Git config includes doppel's index. *(problem)*
-- Nothing after the include sets an identity setting (`user.name`, `user.email`, `user.signingkey`, `gpg.format`, `commit.gpgsign`, `tag.gpgsign`, `core.sshCommand`), which would override every account. *(problem)*
-- doppel's files say what the accounts say: account files, the index, the `allowed_signers` block and the include. A hand edit to `core.sshCommand` in an account file shows up here. *(warning)*
+- Nothing after the include sets an identity setting (`user.name`, `user.email`, `user.signingkey`, `gpg.format`, `commit.gpgsign`, `tag.gpgsign`, `core.sshCommand`, `credential.username`), which would override every account. *(problem)*
+- doppel's files say what the accounts say: account files, the index, the `allowed_signers` block and the include. A hand edit to `core.sshCommand` or `credential.username` in an account file shows up here. *(warning)*
 - Git itself can read the global config and everything it includes (`git config --global --includes --list`, run with the user's own config, unlike doppel's other Git calls). A bad line in a file doppel wrote, or in any file it includes, makes every Git command fail, and only this check sees it. *(problem)*
 - `--fix` rewrites exactly these files, through the same plan and the same validation as any save (R8.2a), so they match the accounts again. It refuses, naming the file and the value, when an account file holds a folder doppel wouldn't write (R2.5). It also restores a missing include. It doesn't touch anything else.
 
 **Each account**
 - **Keys:**
-  - its auth key exists *(problem)*
+  - for accounts using SSH, its auth key exists *(problem)*
   - its keys have a passphrase *(warning)*
   - an agent-held key is unlocked in the agent right now *(warning)*
   - a signing key with a passphrase is in the agent, the auth key included when the account signs with it *(warning)*. `ssh-keygen` signs with the agent's copy and never reads the macOS Keychain, so otherwise every signed commit asks for the passphrase. The fix is `ssh-add <key>` (`ssh-add --apple-use-keychain <key>` on a Mac with Apple's `ssh`), or starting an agent when none is running.
   - the signing key's public key can be read *(problem)*
-- **Shared keys:** two accounts on the same host don't use the same auth key, or both rely on ssh's own keys. Either way, one would log in as the other. *(problem)*
+- **Shared keys:** two accounts on the same host don't use the same auth key, or both rely on ssh's own keys. Either way, one would log in as the other (checked only for accounts that allow SSH). *(problem)*
 - **Folders:** every bound folder exists. *(warning)*
 - **SSH config:** `~/.ssh/config` doesn't offer another `IdentityFile` for one of the account's hosts. If the account's key were rejected, ssh would fall back to that key and could log in as someone else. *(warning)*
   - doppel finds these by comparing `ssh -G -F ~/.ssh/config <host>` with a host that doesn't exist, so `Include`, `Match` and wildcards count as ssh counts them, and nothing connects.
 - **Keychain (macOS with Apple's `ssh`):** when the auth key has a passphrase, `~/.ssh/config` sets `UseKeychain yes` and `AddKeysToAgent yes` for each of the account's hosts. Without the first, macOS asks for the passphrase in the terminal; without the second, ssh doesn't load the key into the agent, so signing with it asks. *(warning)*
   - `AddKeysToAgent` comes from `ssh -G`. `ssh -G` doesn't print `UseKeychain`, so doppel reads that one setting from the file itself, as ssh would: the first value that applies wins, and `Host` blocks (with wildcards and `!`) and `Include` count. A `Match` block is taken to apply, so an unusual setup isn't reported as missing it.
-- **HTTPS remotes:** no repos in the account's folders fetch or push over HTTPS, which these keys don't cover. Reported only, never changed. *(warning)*
-  - Each repo gets its own warning, up to five per account, then a count. The fix is the exact command, such as `git -C ~/projects/personal/configsh remote set-url origin git@github.com:vehkiya/configsh.git`, with `--push` for a push URL that's HTTPS on its own.
-  - The SSH URL is `git@<host>:<path>`, as GitHub, GitLab, Gitea and most hosts take it. A user name or token in the HTTPS URL is dropped, so it's never printed. A URL with a port gets a generic example instead, since the host's SSH port can't be told from it.
+- **Remote protocol mismatches:**
+  - For SSH-only accounts: no repos in the account's folders fetch or push over HTTPS, which these keys don't cover. Reported with `git -C <repo> remote set-url origin git@<host>:<path>`. *(warning)*
+  - For HTTPS-only accounts: no repos in the account's folders fetch or push over SSH. Reported with `git -C <repo> remote set-url origin https://<host>/<path>`. *(warning)*
+  - For hybrid (`both`) accounts: both SSH and HTTPS remotes are allowed without warnings.
+  - Each mismatched repo gets its own warning, up to five per account, then a count.
+  - The converted SSH URL is `git@<host>:<path>`, and converted HTTPS URL is `https://<host>/<path>`. A user name or token in an HTTPS URL is dropped when converting to SSH, so it's never printed.
   - To stay quick on big trees, doppel looks three levels deep and skips hidden, `node_modules` and `vendor` folders.
 
 ### R8. Safety
@@ -245,18 +253,20 @@ Checks everything that could make Git use the wrong account, and prints a one-li
 
 - **R9.1** `doppel` with no arguments opens an account browser in the style of sshx when both stdin and stdout are terminals and `ACCESSIBLE` is not set. Otherwise, or with `ACCESSIBLE` set, it prints `ls`.
   - **Left pane:** account IDs and emails, with the default marked ★; `/` filters.
-  - **Right pane:** name, email, hosts, GitHub user, folders, keys with status badges (passphrase, in agent), signing, and the account file. On terminals narrower than 100 columns, Tab switches between the list and the details.
+  - **Right pane:** name, email, protocol, HTTPS user / helper (if configured), hosts, GitHub user, folders, keys with status badges (passphrase, in agent), signing, and the account file. On terminals narrower than 100 columns, Tab switches between the list and the details.
   - **Keys:** edit (`enter`/`e`), add (`a`), delete (`d`, then `y` to confirm), bind a folder (`b`), make default (`*`), export (`x`), upload to GitHub (`u`), test (`t`), quit (`q`/`esc`).
   - Each action leaves the browser, runs as its command would, and returns to the same account. A one-line result shows in the browser; output to read (`export`, `test`) and warnings or errors wait for Enter first.
 - **R9.1a** `doppel add` and `doppel edit <id>` without flags, in a terminal, walk through a wizard instead:
   - identity, hosts and GitHub user
   - folders and whether it's the default
-  - auth key: keep, generate, a key found in `~/.ssh` (including `.pub` files for agent-held keys), another file, or none
+  - protocol: SSH, HTTPS, or Both (hybrid)
+  - HTTPS username (for HTTPS or Both)
+  - auth key (skipped when protocol is HTTPS): keep, generate, a key found in `~/.ssh` (including `.pub` files for agent-held keys), another file, or none
   - signing, and what to sign
   - a review before saving
 
   The wizard is a single form:
-  - Shift+Tab goes back to any earlier page, keeping what was typed, even an answer that isn't finished or valid yet. Each page checks its answer when the user moves on, and Save checks every page once more. A page that's hidden by then, such as the GitHub username once no host is GitHub, doesn't count.
+  - Shift+Tab goes back to any earlier page, keeping what was typed, even an answer that isn't finished or valid yet. Each page checks its answer when the user moves on, and Save checks every page once more. A page that's hidden by then, such as the GitHub username once no host is GitHub, or the auth key when protocol is HTTPS, doesn't count.
   - The key choices stay the same throughout. One that doesn't fit the other answers, such as signing with an auth key when there isn't one, or generating a key where a file already exists, is refused with the reason. The description says which file Generate creates.
   - Esc or Ctrl+C cancels from any page without saving; the same keys cancel every other prompt too.
   - The review page reflects the answers as they stand, including changes made after going back.
@@ -269,8 +279,8 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   With any account or key flag, or without a terminal, they never ask: scripts get errors, not questions.
 - **R9.1b** With `ACCESSIBLE` set, as in other Charm tools, forms become plain line-by-line prompts for screen readers, and `doppel` with no arguments prints `ls` instead of opening the full-screen browser.
 - **R9.2** Every action is also a subcommand, with flags for non-interactive use, so configsh or scripts can set up accounts.
-- **R9.2b Machine-readable output:** `doppel ls --json` outputs an array of account objects with stable fields: `id`, `name`, `email`, `default`, `hosts`, `github_user`, `folders`, `auth_key`, `signing_key`, `sign_commits`, and `sign_tags`. An empty list produces `[]`.
-- **R9.2a Shell completion:** `doppel completion zsh|bash|fish` prints a script that completes commands, flags, account IDs (with their emails), the folders bound to accounts for `unbind`, known hosts for `--host`, folders for `--folder`, `bind` and `whoami`, and files for `--auth-key` and `--signing-key`. It covers `dop` too.
+- **R9.2b Machine-readable output:** `doppel ls --json` outputs an array of account objects with stable fields: `id`, `name`, `email`, `default`, `protocol`, `https_user`, `credential_helper`, `hosts`, `github_user`, `folders`, `auth_key`, `signing_key`, `sign_commits`, and `sign_tags`. An empty list produces `[]`.
+- **R9.2a Shell completion:** `doppel completion zsh|bash|fish` prints a script that completes commands, flags, account IDs (with their emails), the folders bound to accounts for `unbind`, known hosts for `--host`, folders for `--folder`, `bind` and `whoami`, protocol choices for `--protocol`, and files for `--auth-key` and `--signing-key`. It covers `dop` too.
   - The scripts are thin. They run the hidden `doppel __complete <words>`, which prints the candidates and whether the shell should complete paths itself, so `~` and quoting work as in the shell's own completion.
   - doppel learns each command's flags from the command itself, without running it, so completion can't fall behind the flags. `__complete` never writes, never asks anything, and doesn't fail: without Git or accounts it offers less.
 - **R9.3** `dop` is an alias for `doppel` (a shell alias in configsh, like sshx's `fssh`), and doppel behaves identically under either name.
@@ -311,6 +321,7 @@ Aliases: list (ls), remove and delete (rm), upgrade (update).
 
 Flags for add and edit:
   --name, --email, --host (repeatable), --github-user,
+  --protocol <ssh|https|both>, --https-user <name>, --credential-helper <helper>,
   --auth-key <path> | --generate-auth-key,
   --signing-key <path> | --generate-signing-key | --sign-with-auth-key | --no-signing,
   --sign-commits=false, --sign-tags=false (sign only tags, or only commits),
@@ -351,6 +362,8 @@ Every account file sets every setting doppel manages, including a "reset" value 
 [doppel]
     account = work
     default = false
+    protocol = both
+    httpsUser = jane-at-acme
     host = github.com
     githubUser = jane-at-acme
     folder = ~/projects/work/
@@ -367,14 +380,17 @@ Every account file sets every setting doppel manages, including a "reset" value 
     gpgsign = true
 [core]
     sshCommand = ssh -i ~/.ssh/id_ed25519_work -o IdentitiesOnly=yes
+[credential]
+    username = jane-at-acme
 ```
 
 - Git ignores the `[doppel]` section. Only the single-valued `doppel.account` is read through Git (R6.2).
 - **What doppel reads back vs. derives:**
-  - Settings with a one-to-one Git equivalent are read back from the file, so hand edits to them stick: `user.name`, `user.email`, `user.signingkey` (the signing key's `.pub`), `commit.gpgsign`, `tag.gpgsign`.
+  - Settings with a one-to-one Git equivalent are read back from the file, so hand edits to them stick: `user.name`, `user.email`, `user.signingkey` (the signing key's `.pub`), `commit.gpgsign`, `tag.gpgsign`, `credential.username`, `credential.helper`.
   - One list in the code (`accounts.Managed`) names every managed key: its value, whether it's read back, and whether it's an identity setting (the ones R1.5, R6.3 and R7 look at). Adding a managed key means adding it there.
-  - `core.sshCommand` combines several values, so it is always regenerated from `doppel.authKey`, and hand edits to it are overwritten.
-  - doppel's own fields live under `[doppel]`. `doppel.retiredSigner` (R4.3) is read back too, and repeats.
+  - `core.sshCommand` combines several values, so it is always regenerated from `doppel.authKey` (or reset to `ssh` for HTTPS-only accounts), and hand edits to it are overwritten.
+  - `credential.username` and `credential.helper` reset to `""` when unset or inapplicable, ensuring Git does not leak values from an enclosing default account.
+  - doppel's own fields live under `[doppel]`: `doppel.protocol` (`ssh`, `https`, `both`), `doppel.httpsUser`, `doppel.credentialHelper`, `doppel.retiredSigner` (R4.3).
 - **Other settings are kept.** Settings doppel doesn't manage, such as a per-account `pull.rebase`, are never touched, so an account file can carry any extra Git settings for that account.
 - The list-valued keys (`host`, `folder`) build up across includes, so doppel reads them from each account file directly with `git config --file`, never from a repo's combined config.
 

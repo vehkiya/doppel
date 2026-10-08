@@ -71,15 +71,19 @@ func (w *writeFlags) assumeYes() bool { return w.yes || w.dryRun }
 
 // accountFlags are the account fields shared by add and edit.
 type accountFlags struct {
-	name, email, githubUser string
-	hosts, folders          stringList
-	makeDefault             bool
+	name, email, githubUser               string
+	protocol, httpsUser, credentialHelper string
+	hosts, folders                        stringList
+	makeDefault                           bool
 }
 
 func (f *accountFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.name, "name", "", "commit author name")
 	fs.StringVar(&f.email, "email", "", "commit author email")
 	fs.StringVar(&f.githubUser, "github-user", "", "GitHub username")
+	fs.StringVar(&f.protocol, "protocol", "", "remote protocol: ssh, https, or both")
+	fs.StringVar(&f.httpsUser, "https-user", "", "HTTPS username for Git credential helper")
+	fs.StringVar(&f.credentialHelper, "credential-helper", "", "custom Git credential helper override")
 	fs.Var(&f.hosts, "host", "Git host (repeatable)")
 	fs.Var(&f.folders, "folder", "folder the account applies to (repeatable)")
 	fs.BoolVar(&f.makeDefault, "default", false, "make this the default account")

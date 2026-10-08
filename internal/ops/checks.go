@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/vehkiya/doppel/internal/accounts"
+	"github.com/vehkiya/doppel/internal/github"
 	"github.com/vehkiya/doppel/internal/keys"
 )
 
@@ -23,13 +24,55 @@ type Check struct {
 // true when any check failed.
 func Test(ctx Context, acc *accounts.Account, signers string, report func(Check)) (failed bool) {
 	for _, host := range acc.Hosts {
-		c := Login(ctx, acc, host)
-		report(c)
-		failed = failed || !c.OK
+		if acc.AllowsSSH() {
+			c := Login(ctx, acc, host)
+			report(c)
+			failed = failed || !c.OK
+		}
+		if acc.AllowsHTTPS() {
+			c := CheckHTTPS(ctx, acc, host)
+			report(c)
+			failed = failed || !c.OK
+		}
 	}
 	c := Sign(ctx, acc, signers)
 	report(c)
 	return failed || (!c.OK && !c.Skipped)
+}
+
+// CheckHTTPS verifies HTTPS authentication configuration for host.
+func CheckHTTPS(ctx Context, acc *accounts.Account, host string) Check {
+	label := host
+	if acc.AllowsSSH() {
+		label += " (https)"
+	}
+	c := Check{Label: label}
+	user := acc.EffectiveHTTPSUser()
+	if user == "" {
+		c.OK, c.Detail = true, "credential helper default"
+		return c
+	}
+	if ctx.GitHub.Is(host) {
+		accs, err := github.Accounts(host)
+		if err == nil && len(accs) > 0 {
+			found := false
+			for _, a := range accs {
+				if strings.EqualFold(a.Login, user) {
+					found = true
+					break
+				}
+			}
+			if found {
+				c.OK, c.Detail = true, "signed in with gh as "+user
+				return c
+			}
+			c.Detail = fmt.Sprintf("gh is not signed in as %s on %s", user, host)
+			c.Fix = fmt.Sprintf("gh auth login -h %s", host)
+			return c
+		}
+	}
+	c.OK, c.Detail = true, "configured for "+user
+	return c
 }
 
 // Login logs in to host with acc's auth key in batch mode and says how it went.
