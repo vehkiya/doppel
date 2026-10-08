@@ -27,8 +27,10 @@ func TestSSHCommand(t *testing.T) {
 // Every field an account file holds comes back as it was saved: a managed
 // key whose value and read disagree would lose a setting on the next save.
 func TestManagedKeysRoundTrip(t *testing.T) {
-	acc := &Account{
-		ID: "work", Name: "Jane Doe", Email: "jane@acme.com", Hosts: []string{"github.com", "gitlab.com"},
+	acc := &Account{ //nolint:gosec // test account settings, not a hardcoded credential
+		ID: "work", Name: "Jane Doe", Email: "jane@acme.com", Protocol: ProtocolSSH,
+		HTTPSUser: "jane-acme", CredentialHelper: "!gh auth git-credential",
+		Hosts:      []string{"github.com", "gitlab.com"},
 		GitHubUser: "jane-acme", Folders: []string{"~/work/", "~/clients/"}, Default: true,
 		AuthKey: "~/.ssh/id_work", SigningKey: "~/.ssh/id_work_signing.pub", SignCommits: true, SignTags: false,
 		Retired: []RetiredSigner{{Until: "20260101120000", Email: "jane@old.dev", Key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"}},
@@ -52,7 +54,7 @@ func TestManagedKeysRoundTrip(t *testing.T) {
 	if !slices.Equal(settings, managed) {
 		t.Errorf("Settings writes %v, want every managed key: %v", settings, managed)
 	}
-	want := []string{KeyName, KeyEmail, KeySigningKey, KeyGPGFormat, KeyCommitSign, KeyTagSign, KeySSHCommand}
+	want := []string{KeyName, KeyEmail, KeySigningKey, KeyGPGFormat, KeyCommitSign, KeyTagSign, KeySSHCommand, KeyCredentialUser}
 	if got := IdentityKeys(); !slices.Equal(got, want) {
 		t.Errorf("IdentityKeys = %v, want %v", got, want)
 	}
@@ -116,5 +118,89 @@ func TestValidateAll(t *testing.T) {
 		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 			t.Errorf("error = %v, want one mentioning %q", err, c.want)
 		}
+	}
+}
+
+func TestParseProtocol(t *testing.T) {
+	cases := map[string]Protocol{
+		"":       ProtocolSSH,
+		"ssh":    ProtocolSSH,
+		"SSH":    ProtocolSSH,
+		"https":  ProtocolHTTPS,
+		"HTTPS":  ProtocolHTTPS,
+		"http":   ProtocolHTTPS,
+		"both":   ProtocolBoth,
+		"hybrid": ProtocolBoth,
+		"all":    ProtocolBoth,
+	}
+	for input, want := range cases {
+		got, err := ParseProtocol(input)
+		if err != nil || got != want {
+			t.Errorf("ParseProtocol(%q) = %q, %v; want %q, nil", input, got, err, want)
+		}
+	}
+	for _, bad := range []string{"ftp", "git", "invalid"} {
+		if _, err := ParseProtocol(bad); err == nil {
+			t.Errorf("ParseProtocol(%q) accepted invalid protocol", bad)
+		}
+	}
+}
+
+func TestProtocolSettingsAndResets(t *testing.T) {
+	sshAcc := &Account{
+		ID: "ssh-acc", Name: "Jane", Email: "jane@ssh.io", Protocol: ProtocolSSH,
+		AuthKey: "~/.ssh/id_work",
+	}
+	httpsAcc := &Account{ //nolint:gosec // test account settings, not a hardcoded credential
+		ID: "https-acc", Name: "Jane", Email: "jane@https.io", Protocol: ProtocolHTTPS,
+		AuthKey: "~/.ssh/id_work", HTTPSUser: "jane-https", CredentialHelper: "!gh auth git-credential",
+	}
+	hybridAcc := &Account{
+		ID: "hybrid-acc", Name: "Jane", Email: "jane@hybrid.io", Protocol: ProtocolBoth,
+		AuthKey: "~/.ssh/id_work", HTTPSUser: "jane-hybrid",
+	}
+
+	settingMap := func(a *Account) map[string]string {
+		m := map[string]string{}
+		for _, s := range a.Settings() {
+			if len(s.Values) > 0 {
+				m[s.Key] = s.Values[0]
+			}
+		}
+		return m
+	}
+
+	// SSH account must have SSH command and reset credential.username & credential.helper.
+	sshMap := settingMap(sshAcc)
+	if !strings.HasPrefix(sshMap[KeySSHCommand], "ssh -i") {
+		t.Errorf("sshAcc core.sshCommand = %q, want ssh -i ...", sshMap[KeySSHCommand])
+	}
+	if sshMap[KeyCredentialUser] != "" {
+		t.Errorf("sshAcc credential.username = %q, want empty string reset", sshMap[KeyCredentialUser])
+	}
+	if sshMap[KeyCredentialHelperGit] != "" {
+		t.Errorf("sshAcc credential.helper = %q, want empty string reset", sshMap[KeyCredentialHelperGit])
+	}
+
+	// HTTPS account must reset core.sshCommand to plain "ssh" even if AuthKey is set,
+	// and write credential.username and credential.helper.
+	httpsMap := settingMap(httpsAcc)
+	if httpsMap[KeySSHCommand] != "ssh" {
+		t.Errorf("httpsAcc core.sshCommand = %q, want 'ssh' reset", httpsMap[KeySSHCommand])
+	}
+	if httpsMap[KeyCredentialUser] != "jane-https" {
+		t.Errorf("httpsAcc credential.username = %q, want 'jane-https'", httpsMap[KeyCredentialUser])
+	}
+	if httpsMap[KeyCredentialHelperGit] != "!gh auth git-credential" {
+		t.Errorf("httpsAcc credential.helper = %q, want '!gh auth git-credential'", httpsMap[KeyCredentialHelperGit])
+	}
+
+	// Hybrid account must have both core.sshCommand and credential.username.
+	hybridMap := settingMap(hybridAcc)
+	if !strings.HasPrefix(hybridMap[KeySSHCommand], "ssh -i") {
+		t.Errorf("hybridAcc core.sshCommand = %q, want ssh -i ...", hybridMap[KeySSHCommand])
+	}
+	if hybridMap[KeyCredentialUser] != "jane-hybrid" {
+		t.Errorf("hybridAcc credential.username = %q, want 'jane-hybrid'", hybridMap[KeyCredentialUser])
 	}
 }

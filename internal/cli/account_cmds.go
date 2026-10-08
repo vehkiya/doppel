@@ -16,17 +16,20 @@ const lsUsage = "doppel ls [--json]"
 
 // accountJSON is the machine-readable representation of an account for `doppel ls --json`.
 type accountJSON struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Email       string   `json:"email"`
-	Default     bool     `json:"default"`
-	Hosts       []string `json:"hosts"`
-	GitHubUser  string   `json:"github_user"`
-	Folders     []string `json:"folders"`
-	AuthKey     string   `json:"auth_key"`
-	SigningKey  string   `json:"signing_key"`
-	SignCommits bool     `json:"sign_commits"`
-	SignTags    bool     `json:"sign_tags"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Email            string   `json:"email"`
+	Default          bool     `json:"default"`
+	Protocol         string   `json:"protocol"`
+	HTTPSUser        string   `json:"https_user,omitempty"`
+	CredentialHelper string   `json:"credential_helper,omitempty"`
+	Hosts            []string `json:"hosts"`
+	GitHubUser       string   `json:"github_user"`
+	Folders          []string `json:"folders"`
+	AuthKey          string   `json:"auth_key"`
+	SigningKey       string   `json:"signing_key"`
+	SignCommits      bool     `json:"sign_commits"`
+	SignTags         bool     `json:"sign_tags"`
 }
 
 func (a *app) cmdLs(args []string) int {
@@ -55,18 +58,25 @@ func (a *app) cmdLs(args []string) int {
 			if folders == nil {
 				folders = []string{}
 			}
+			proto := string(acc.Protocol)
+			if proto == "" {
+				proto = string(accounts.ProtocolSSH)
+			}
 			out[i] = accountJSON{
-				ID:          acc.ID,
-				Name:        acc.Name,
-				Email:       acc.Email,
-				Default:     acc.Default,
-				Hosts:       hosts,
-				GitHubUser:  acc.GitHubUser,
-				Folders:     folders,
-				AuthKey:     acc.AuthKey.String(),
-				SigningKey:  acc.SigningKey.String(),
-				SignCommits: acc.SignCommits,
-				SignTags:    acc.SignTags,
+				ID:               acc.ID,
+				Name:             acc.Name,
+				Email:            acc.Email,
+				Default:          acc.Default,
+				Protocol:         proto,
+				HTTPSUser:        acc.HTTPSUser,
+				CredentialHelper: acc.CredentialHelper,
+				Hosts:            hosts,
+				GitHubUser:       acc.GitHubUser,
+				Folders:          folders,
+				AuthKey:          acc.AuthKey.String(),
+				SigningKey:       acc.SigningKey.String(),
+				SignCommits:      acc.SignCommits,
+				SignTags:         acc.SignTags,
 			}
 		}
 		return a.printJSON(out)
@@ -125,7 +135,7 @@ func (a *app) cmdLs(args []string) int {
 	return 0
 }
 
-const addUsage = `doppel add <id> --name <name> --email <email> [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default] [--dry-run] [--yes]
+const addUsage = `doppel add <id> --name <name> --email <email> [--protocol <ssh|https|both>] [--https-user <user>] [--credential-helper <helper>] [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default] [--dry-run] [--yes]
   Keys: [--auth-key <key> | --generate-auth-key]
         [--signing-key <key> | --generate-signing-key | --sign-with-auth-key | --no-signing]
         [--sign-commits=false] [--sign-tags=false]`
@@ -159,8 +169,24 @@ func (a *app) cmdAdd(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
+	proto := accounts.ProtocolSSH
+	if f.protocol != "" {
+		proto, err = accounts.ParseProtocol(f.protocol)
+		if err != nil {
+			return a.fail(err)
+		}
+	}
 	req := ops.AddRequest{
-		Account: &accounts.Account{ID: positional[0], Name: f.name, Email: f.email, GitHubUser: f.githubUser, Hosts: f.hosts},
+		Account: &accounts.Account{
+			ID:               positional[0],
+			Name:             f.name,
+			Email:            f.email,
+			Protocol:         proto,
+			HTTPSUser:        f.httpsUser,
+			CredentialHelper: f.credentialHelper,
+			GitHubUser:       f.githubUser,
+			Hosts:            f.hosts,
+		},
 		Folders: f.folders, Default: f.makeDefault, Keys: keyChanges,
 	}
 	return a.exitStatus(a.change(w, func(ctx ops.Context, list []*accounts.Account) (*ops.Change, error) {
@@ -168,7 +194,7 @@ func (a *app) cmdAdd(args []string) int {
 	}))
 }
 
-const editUsage = `doppel edit <id> [--name <name>] [--email <email>] [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default[=false]] [--dry-run] [--yes]
+const editUsage = `doppel edit <id> [--name <name>] [--email <email>] [--protocol <ssh|https|both>] [--https-user <user>] [--credential-helper <helper>] [--host <host>]... [--github-user <user>] [--folder <folder>]... [--default[=false]] [--dry-run] [--yes]
   Keys: [--auth-key <key> | --generate-auth-key]
         [--signing-key <key> | --generate-signing-key | --sign-with-auth-key | --no-signing]
         [--sign-commits=false] [--sign-tags=false]
@@ -217,6 +243,19 @@ func editRequestFromFlags(fs *flag.FlagSet, id string, f accountFlags, k keyFlag
 	}
 	if flagWasSet(fs, "github-user") {
 		req.GitHubUser = &f.githubUser
+	}
+	if flagWasSet(fs, "protocol") {
+		proto, err := accounts.ParseProtocol(f.protocol)
+		if err != nil {
+			return req, err
+		}
+		req.Protocol = &proto
+	}
+	if flagWasSet(fs, "https-user") {
+		req.HTTPSUser = &f.httpsUser
+	}
+	if flagWasSet(fs, "credential-helper") {
+		req.CredentialHelper = &f.credentialHelper
 	}
 	if flagWasSet(fs, "host") {
 		req.Hosts = f.hosts

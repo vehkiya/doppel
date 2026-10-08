@@ -22,19 +22,45 @@ import (
 	"github.com/vehkiya/doppel/internal/paths"
 )
 
+// Protocol is the remote transport protocol an account allows.
+type Protocol string
+
+const (
+	ProtocolSSH   Protocol = "ssh"
+	ProtocolHTTPS Protocol = "https"
+	ProtocolBoth  Protocol = "both"
+)
+
+// ParseProtocol parses a protocol string. Empty defaults to ProtocolSSH.
+func ParseProtocol(s string) (Protocol, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(ProtocolSSH):
+		return ProtocolSSH, nil
+	case string(ProtocolHTTPS), "http":
+		return ProtocolHTTPS, nil
+	case string(ProtocolBoth), "hybrid", "all":
+		return ProtocolBoth, nil
+	default:
+		return "", fmt.Errorf("unknown protocol %q: must be ssh, https, or both", s)
+	}
+}
+
 // Account is one Git identity and the folders where it applies.
 type Account struct {
-	ID          string
-	Name        string
-	Email       string
-	Hosts       []string
-	GitHubUser  string
-	Folders     []string // stored form: real path, "~/"-shortened, ending in "/"
-	Default     bool
-	AuthKey     keys.Ref // private key (or agent-held .pub) for SSH; "" for ssh's own defaults
-	SigningKey  keys.Ref // public half of the signing key; "" when the account doesn't sign
-	SignCommits bool
-	SignTags    bool
+	ID               string
+	Name             string
+	Email            string
+	Protocol         Protocol // remote transport: "ssh" (default), "https", "both"
+	HTTPSUser        string   // username passed to Git credential helper
+	CredentialHelper string   // custom credential helper override
+	Hosts            []string
+	GitHubUser       string
+	Folders          []string // stored form: real path, "~/"-shortened, ending in "/"
+	Default          bool
+	AuthKey          keys.Ref // private key (or agent-held .pub) for SSH; "" for ssh's own defaults
+	SigningKey       keys.Ref // public half of the signing key; "" when the account doesn't sign
+	SignCommits      bool
+	SignTags         bool
 	// Retired lists signing keys and emails the account signed with before.
 	// allowed_signers keeps trusting them for signatures made until they
 	// were retired, so older commits still verify.
@@ -48,23 +74,47 @@ type Account struct {
 	Checksum string
 }
 
+// AllowsSSH reports whether the account allows SSH remote connections.
+func (a *Account) AllowsSSH() bool {
+	return a.Protocol == "" || a.Protocol == ProtocolSSH || a.Protocol == ProtocolBoth
+}
+
+// AllowsHTTPS reports whether the account allows HTTPS remote connections.
+func (a *Account) AllowsHTTPS() bool {
+	return a.Protocol == ProtocolHTTPS || a.Protocol == ProtocolBoth
+}
+
+// EffectiveHTTPSUser returns the username for HTTPS credential helpers:
+// HTTPSUser, or GitHubUser when HTTPSUser is unset.
+func (a *Account) EffectiveHTTPSUser() string {
+	if a.HTTPSUser != "" {
+		return a.HTTPSUser
+	}
+	return a.GitHubUser
+}
+
 // Keys doppel manages in an account file. Everything else in the file is
 // left alone, so an account can carry extra settings of its own.
 const (
-	KeyAccount    = "doppel.account"
-	KeyDefault    = "doppel.default"
-	KeyHost       = "doppel.host"
-	KeyGitHubUser = "doppel.githubUser"
-	KeyFolder     = "doppel.folder"
-	KeyAuthKey    = "doppel.authKey"
-	KeyName       = "user.name"
-	KeyEmail      = "user.email"
-	KeySigningKey = "user.signingkey"
-	KeyGPGFormat  = "gpg.format"
-	KeyCommitSign = "commit.gpgsign"
-	KeyTagSign    = "tag.gpgsign"
-	KeySSHCommand = "core.sshCommand"
-	KeyRetired    = "doppel.retiredSigner"
+	KeyAccount             = "doppel.account"
+	KeyDefault             = "doppel.default"
+	KeyProtocol            = "doppel.protocol"
+	KeyHost                = "doppel.host"
+	KeyGitHubUser          = "doppel.githubUser"
+	KeyHTTPSUser           = "doppel.httpsUser"
+	KeyCredentialHelper    = "doppel.credentialHelper" //nolint:gosec // Git config key name, not a secret credential
+	KeyFolder              = "doppel.folder"
+	KeyAuthKey             = "doppel.authKey"
+	KeyName                = "user.name"
+	KeyEmail               = "user.email"
+	KeySigningKey          = "user.signingkey"
+	KeyGPGFormat           = "gpg.format"
+	KeyCommitSign          = "commit.gpgsign"
+	KeyTagSign             = "tag.gpgsign"
+	KeySSHCommand          = "core.sshCommand"
+	KeyCredentialUser      = "credential.username" //nolint:gosec // Git config key name, not a secret credential
+	KeyCredentialHelperGit = "credential.helper"   //nolint:gosec // Git config key name, not a secret credential
+	KeyRetired             = "doppel.retiredSigner"
 )
 
 // DefaultHost is an account's host unless it names others.
@@ -104,10 +154,23 @@ var Managed = []ManagedKey{
 	{Key: KeyAccount, value: func(a *Account) []string { return []string{a.ID} }},
 	{Key: KeyDefault, value: func(a *Account) []string { return []string{strconv.FormatBool(a.Default)} },
 		read: func(a *Account, v []string) { a.Default = ParseBool(last(v)) }},
+	{Key: KeyProtocol, value: func(a *Account) []string {
+		if a.Protocol == "" || a.Protocol == ProtocolSSH {
+			return []string{string(ProtocolSSH)}
+		}
+		return []string{string(a.Protocol)}
+	}, read: func(a *Account, v []string) {
+		p, _ := ParseProtocol(last(v))
+		a.Protocol = p
+	}},
 	{Key: KeyHost, value: func(a *Account) []string { return a.Hosts },
 		read: func(a *Account, v []string) { a.Hosts = v }},
 	{Key: KeyGitHubUser, value: func(a *Account) []string { return optional(a.GitHubUser) },
 		read: func(a *Account, v []string) { a.GitHubUser = last(v) }},
+	{Key: KeyHTTPSUser, value: func(a *Account) []string { return optional(a.HTTPSUser) },
+		read: func(a *Account, v []string) { a.HTTPSUser = last(v) }},
+	{Key: KeyCredentialHelper, value: func(a *Account) []string { return optional(a.CredentialHelper) },
+		read: func(a *Account, v []string) { a.CredentialHelper = last(v) }},
 	{Key: KeyFolder, value: func(a *Account) []string { return a.Folders },
 		read: func(a *Account, v []string) {
 			for _, f := range v {
@@ -143,7 +206,32 @@ var Managed = []ManagedKey{
 	{Key: KeyTagSign, Identity: true, value: func(a *Account) []string {
 		return []string{strconv.FormatBool(a.SigningKey != "" && a.SignTags)}
 	}, read: func(a *Account, v []string) { a.SignTags = ParseBool(last(v)) }},
-	{Key: KeySSHCommand, Identity: true, value: func(a *Account) []string { return []string{SSHCommand(a.AuthKey)} }},
+	{Key: KeySSHCommand, Identity: true, value: func(a *Account) []string {
+		if a.Protocol == ProtocolHTTPS {
+			return []string{"ssh"}
+		}
+		return []string{SSHCommand(a.AuthKey)}
+	}},
+	{Key: KeyCredentialUser, Identity: true, value: func(a *Account) []string {
+		if a.AllowsHTTPS() && a.EffectiveHTTPSUser() != "" {
+			return []string{a.EffectiveHTTPSUser()}
+		}
+		return []string{""}
+	}, read: func(a *Account, v []string) {
+		if a.HTTPSUser == "" && len(v) > 0 && last(v) != "" {
+			a.HTTPSUser = last(v)
+		}
+	}},
+	{Key: KeyCredentialHelperGit, value: func(a *Account) []string {
+		if a.CredentialHelper != "" {
+			return []string{a.CredentialHelper}
+		}
+		return []string{""}
+	}, read: func(a *Account, v []string) {
+		if a.CredentialHelper == "" && len(v) > 0 && last(v) != "" {
+			a.CredentialHelper = last(v)
+		}
+	}},
 }
 
 // RetiredSigner is an email and signing key an account signed with before:
@@ -412,6 +500,14 @@ func ValidateGitHubUser(user string) error {
 	return nil
 }
 
+// ValidateHTTPSUser checks an HTTPS username; "" (none) is fine.
+func ValidateHTTPSUser(user string) error {
+	if strings.ContainsAny(user, "\n\r\t") {
+		return errors.New("HTTPS username can't contain line breaks")
+	}
+	return nil
+}
+
 // Validate checks one account's fields.
 func (a *Account) Validate() error {
 	if err := ValidateID(a.ID); err != nil {
@@ -445,6 +541,17 @@ func (a *Account) Validate() error {
 		if err := r.validate(); err != nil {
 			return fmt.Errorf("account %s: %s %q%s: %w (fix or remove that line in the account file)", a.ID, KeyRetired, r.String(), where, err)
 		}
+	}
+	if a.Protocol != "" {
+		if _, err := ParseProtocol(string(a.Protocol)); err != nil {
+			return fmt.Errorf("account %s: %w", a.ID, err)
+		}
+	}
+	if err := ValidateHTTPSUser(a.HTTPSUser); err != nil {
+		return fmt.Errorf("account %s: %w", a.ID, err)
+	}
+	if strings.ContainsAny(a.CredentialHelper, "\n\r") {
+		return fmt.Errorf("account %s: credential helper can't contain line breaks", a.ID)
 	}
 	for _, f := range a.Folders {
 		if err := paths.ValidateFolder(f); err != nil {

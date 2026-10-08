@@ -46,7 +46,7 @@ func editWizardWhile(t *testing.T, s *sandbox, other func(b *app)) (stderr strin
 	a := s.newApp(s.Home)
 	a.interactive = true
 	a.stdin = bufio.NewReader(&afterFirstRead{
-		r: strings.NewReader(script("", "jane@acme.io", "", "", "", "", "", "", "")),
+		r: strings.NewReader(script("", "jane@acme.io", "", "", "", "", "", "", "", "")),
 		do: func() {
 			b, _ := another(a)
 			other(b)

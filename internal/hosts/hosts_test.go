@@ -71,6 +71,39 @@ func TestSwitchToSSH(t *testing.T) {
 	}
 }
 
+func TestHTTPSURL(t *testing.T) {
+	cases := map[string]string{
+		"git@github.com:vehkiya/configsh.git":     "https://github.com/vehkiya/configsh.git",
+		"ssh://git@github.com/vehkiya/configsh":   "https://github.com/vehkiya/configsh",
+		"git@gitlab.acme.com:group/sub/repo.git/": "https://gitlab.acme.com/group/sub/repo.git",
+		"https://github.com/acme/api.git":         "",
+		"/srv/git/repo.git":                       "",
+	}
+	for url, want := range cases {
+		got, ok := hosts.HTTPSURL(url)
+		if got != want || ok != (want != "") {
+			t.Errorf("HTTPSURL(%q) = %q, %v; want %q", url, got, ok, want)
+		}
+	}
+}
+
+func TestSwitchToHTTPS(t *testing.T) {
+	r := hosts.Remote{Name: "origin", FetchURL: "git@github.com:acme/api.git", PushURL: "git@github.com:acme/api.git"}
+	if got := hosts.SwitchToHTTPS(r, ""); got != "git remote set-url origin https://github.com/acme/api.git" {
+		t.Errorf("SwitchToHTTPS = %q", got)
+	}
+	if got := hosts.SwitchToHTTPS(r, "~/my repos/it's"); got != `git -C ~/'my repos/it'\''s' remote set-url origin https://github.com/acme/api.git` {
+		t.Errorf("SwitchToHTTPS quotes the folder as %q", got)
+	}
+	r.FetchURL = "https://github.com/acme/api.git" // only pushing goes over SSH
+	if got := hosts.SwitchToHTTPS(r, ""); got != "git remote set-url --push origin https://github.com/acme/api.git" {
+		t.Errorf("SwitchToHTTPS = %q", got)
+	}
+	if got := hosts.SwitchToHTTPS(hosts.Remote{Name: "origin", FetchURL: "https://a/b", PushURL: "https://a/b"}, ""); got != "" {
+		t.Errorf("SwitchToHTTPS on an HTTPS remote = %q", got)
+	}
+}
+
 func TestRemotes(t *testing.T) {
 	s := testenv.New(t)
 	repo := s.GitInit("repo")

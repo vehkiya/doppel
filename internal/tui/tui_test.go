@@ -321,3 +321,42 @@ func TestStaleIndexNotice(t *testing.T) {
 		t.Errorf("stale notice shown when StaleIndex is false:\n%s", view)
 	}
 }
+
+func TestDetailsHTTPSAndHybrid(t *testing.T) {
+	accs := []*accounts.Account{
+		{
+			ID:               "https-acc",
+			Name:             "Jane Corp",
+			Email:            "jane@corp.dev",
+			Protocol:         accounts.ProtocolHTTPS,
+			HTTPSUser:        "jane-corp",
+			CredentialHelper: "osxkeychain",
+			Hosts:            []string{"gitlab.corp.dev"},
+		},
+		{
+			ID:         "hybrid-acc",
+			Name:       "Jane OSS",
+			Email:      "jane@oss.dev",
+			Protocol:   accounts.ProtocolBoth,
+			HTTPSUser:  "jane-oss",
+			AuthKey:    "~/.ssh/id_ed25519_oss",
+			Hosts:      []string{"github.com"},
+			GitHubUser: "jane-oss",
+		},
+	}
+	m := newModel(t, accs, 120, 30)
+	view := viewOf(m)
+	for _, want := range []string{"Protocol   HTTPS", "HTTPS User jane-corp", "Helper     osxkeychain", "Auth key   none (HTTPS auth)"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("HTTPS account details missing %q:\n%s", want, view)
+		}
+	}
+
+	m, _ = press(m, "j") // down to hybrid
+	view = viewOf(m)
+	for _, want := range []string{"Protocol   Both (SSH + HTTPS)", "HTTPS User jane-oss", "Auth key   ~/.ssh/id_ed25519_oss"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("Hybrid account details missing %q:\n%s", want, view)
+		}
+	}
+}

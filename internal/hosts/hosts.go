@@ -230,6 +230,65 @@ func SwitchToSSH(r Remote, dir string) string {
 	return strings.Join(commands, " && ")
 }
 
+// HTTPSURL returns the HTTPS form of an SSH remote (git@host:path or
+// ssh://[user@]host[:port]/path). ok is false for a URL that is already
+// HTTP/HTTPS, or a local path.
+func HTTPSURL(url string) (https string, ok bool) {
+	if IsHTTP(url) {
+		return "", false
+	}
+	if rest, found := strings.CutPrefix(url, "ssh://"); found {
+		hostPart, path, _ := strings.Cut(rest, "/")
+		if at := strings.LastIndex(hostPart, "@"); at >= 0 {
+			hostPart = hostPart[at+1:]
+		}
+		if strings.HasPrefix(hostPart, "[") {
+			hostPart, _, _ = strings.Cut(strings.TrimPrefix(hostPart, "["), "]")
+		} else {
+			hostPart, _, _ = strings.Cut(hostPart, ":")
+		}
+		path = strings.Trim(path, "/")
+		if hostPart == "" || path == "" || strings.ContainsAny(path, "?#") {
+			return "", false
+		}
+		return "https://" + hostPart + "/" + path, true
+	}
+	colon := strings.Index(url, ":")
+	if colon <= 0 || strings.Contains(url[:colon], "/") {
+		return "", false
+	}
+	hostPart := url[:colon]
+	path := strings.Trim(url[colon+1:], "/")
+	if at := strings.LastIndex(hostPart, "@"); at >= 0 {
+		hostPart = hostPart[at+1:]
+	}
+	if hostPart == "" || path == "" || strings.ContainsAny(hostPart, ":[") || strings.ContainsAny(path, "?#") {
+		return "", false
+	}
+	return "https://" + hostPart + "/" + path, true
+}
+
+// SwitchToHTTPS returns the command that switches a remote's SSH URLs to
+// HTTPS, or "" when there's nothing it can switch. dir is the repo the
+// command runs in, as the user would type it; "" leaves out -C, for a
+// command run inside the repo.
+func SwitchToHTTPS(r Remote, dir string) string {
+	git := "git"
+	if dir != "" {
+		git += " -C " + shellArg(dir)
+	}
+	var commands []string
+	if https, ok := HTTPSURL(r.FetchURL); ok {
+		commands = append(commands, git+" remote set-url "+shellArg(r.Name)+" "+https)
+	}
+	if r.PushURL != r.FetchURL {
+		if https, ok := HTTPSURL(r.PushURL); ok {
+			commands = append(commands, git+" remote set-url --push "+shellArg(r.Name)+" "+https)
+		}
+	}
+	return strings.Join(commands, " && ")
+}
+
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./~@%+=:,-]+$`)
 
 // shellArg quotes s for a shell when it needs it. A leading "~/" stays

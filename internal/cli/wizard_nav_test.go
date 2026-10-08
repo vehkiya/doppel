@@ -229,12 +229,13 @@ func TestWizardFormWalksEveryPage(t *testing.T) {
 	next()
 	d.typeText("~/projects/work")
 	next()
+	next() // protocol: ssh (the first choice)
 	next() // auth key: generate one (the first choice)
 	next() // signing: with the auth key (the first choice)
 	next() // sign: commits and tags, as preselected
 
 	// No page for a key file, as neither choice asked for one.
-	want := []string{"id", "name", "email", "hosts", "github-user", "folders", "auth", "signing", "sign", "save"}
+	want := []string{"id", "name", "email", "hosts", "github-user", "folders", "protocol", "auth", "signing", "sign", "save"}
 	if !slices.Equal(focus, want) {
 		t.Errorf("pages visited = %q, want %q", focus, want)
 	}
@@ -496,5 +497,24 @@ func TestWizardSaveRefusesAnswersThatNoLongerFit(t *testing.T) {
 	d.press(tea.KeyEnter)
 	if view := d.view(); d.form.State == huh.StateCompleted || !strings.Contains(view, "there's no auth key to sign with") {
 		t.Errorf("saved answers that don't fit (state %v):\n%s", d.form.State, view)
+	}
+}
+
+func TestWizardHTTPSFlow(t *testing.T) {
+	_, ans, d := newWizard(t)
+	fillIdentity(d)
+	d.advanceTo("protocol")
+	d.choose(1) // SSH -> HTTPS
+	if ans.Protocol != string(accounts.ProtocolHTTPS) {
+		t.Fatalf("protocol = %q, want https", ans.Protocol)
+	}
+	if got := d.focused(); got != "https-user" {
+		t.Fatalf("after choosing HTTPS, focus = %q, want https-user", got)
+	}
+	d.typeText("jane-corp")
+	d.press(tea.KeyEnter)
+	// Auth key page should be skipped, landing straight on signing!
+	if got := d.focused(); got != "signing" {
+		t.Fatalf("after https-user, focus = %q, want signing (auth skipped)", got)
 	}
 }

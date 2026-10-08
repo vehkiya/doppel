@@ -32,6 +32,9 @@ func Add(ctx Context, list []*accounts.Account, req AddRequest) (*Change, error)
 	if len(acc.Hosts) == 0 {
 		acc.Hosts = []string{accounts.DefaultHost}
 	}
+	if acc.Protocol == "" {
+		acc.Protocol = accounts.ProtocolSSH
+	}
 	if err := acc.Validate(); err != nil {
 		return nil, err
 	}
@@ -59,6 +62,9 @@ func Add(ctx Context, list []*accounts.Account, req AddRequest) (*Change, error)
 type EditRequest struct {
 	ID                      string
 	Name, Email, GitHubUser *string
+	Protocol                *accounts.Protocol
+	HTTPSUser               *string
+	CredentialHelper        *string
 	Hosts                   []string  // replaces the hosts; nil keeps them
 	Folders                 *[]string // replaces the folders, as the user typed them
 	Default                 *bool
@@ -67,8 +73,9 @@ type EditRequest struct {
 
 // Empty reports whether the request changes nothing.
 func (r EditRequest) Empty() bool {
-	return r.Name == nil && r.Email == nil && r.GitHubUser == nil && r.Hosts == nil && r.Folders == nil &&
-		r.Default == nil && !r.Keys.Any()
+	return r.Name == nil && r.Email == nil && r.GitHubUser == nil &&
+		r.Protocol == nil && r.HTTPSUser == nil && r.CredentialHelper == nil &&
+		r.Hosts == nil && r.Folders == nil && r.Default == nil && !r.Keys.Any()
 }
 
 // Edit changes an account.
@@ -86,6 +93,15 @@ func Edit(ctx Context, list []*accounts.Account, req EditRequest) (*Change, erro
 	if req.GitHubUser != nil {
 		acc.GitHubUser = *req.GitHubUser
 	}
+	if req.Protocol != nil {
+		acc.Protocol = *req.Protocol
+	}
+	if req.HTTPSUser != nil {
+		acc.HTTPSUser = *req.HTTPSUser
+	}
+	if req.CredentialHelper != nil {
+		acc.CredentialHelper = *req.CredentialHelper
+	}
 	if req.Hosts != nil {
 		acc.Hosts = req.Hosts
 	}
@@ -102,6 +118,9 @@ func Edit(ctx Context, list []*accounts.Account, req EditRequest) (*Change, erro
 		} else {
 			acc.Default = false
 		}
+	}
+	if err := acc.Validate(); err != nil {
+		return nil, err
 	}
 	newKeys, err := applyKeys(ctx, acc, req.Keys)
 	if err != nil {

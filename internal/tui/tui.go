@@ -407,6 +407,20 @@ func (m Model) details(acc *accounts.Account) string {
 	}
 	row("Name", acc.Name)
 	row("Email", acc.Email)
+	switch acc.Protocol {
+	case accounts.ProtocolHTTPS:
+		row("Protocol", "HTTPS")
+	case accounts.ProtocolBoth:
+		row("Protocol", "Both (SSH + HTTPS)")
+	default:
+		row("Protocol", "SSH")
+	}
+	if acc.AllowsHTTPS() && acc.EffectiveHTTPSUser() != "" {
+		row("HTTPS User", acc.EffectiveHTTPSUser())
+	}
+	if acc.CredentialHelper != "" {
+		row("Helper", acc.CredentialHelper)
+	}
 	row("Hosts", strings.Join(acc.Hosts, ", "))
 	if acc.GitHubUser != "" {
 		row("GitHub", acc.GitHubUser)
@@ -421,7 +435,9 @@ func (m Model) details(acc *accounts.Account) string {
 	}
 
 	info := m.info[acc.ID]
-	if acc.AuthKey == "" {
+	if acc.Protocol == accounts.ProtocolHTTPS {
+		row("Auth key", "none (HTTPS auth)")
+	} else if acc.AuthKey == "" {
 		row("Auth key", "ssh's own keys")
 	} else {
 		row("Auth key", acc.AuthKey.Display())

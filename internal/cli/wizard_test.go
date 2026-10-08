@@ -34,6 +34,7 @@ func TestAddWizard(t *testing.T) {
 		"",                // hosts: github.com
 		"jane-acme",       // GitHub username
 		"~/projects/work", // folders (the first account is the default without asking)
+		"",                // protocol: ssh
 		"",                // auth key: generate a new one
 		"",                // signing: with the auth key
 		"0",               // sign commits and tags
@@ -73,6 +74,7 @@ func TestAddWizardStartsFromTheGlobalIdentity(t *testing.T) {
 		"",                 // start from ~/.gitconfig: yes
 		"personal", "", "", // ID; name and email come prefilled
 		"", "", "", // hosts, GitHub username, folders
+		"",     // protocol: ssh
 		"", "", // keep the auth key, keep the signing key
 		"0", // sign as before: commits only
 		"",  // save
@@ -101,6 +103,7 @@ func TestEditWizard(t *testing.T) {
 		"", "jane@acme.io", // name stays, new email
 		"", "", "", // hosts, GitHub username, folders stay
 		"", // not the default
+		"", // protocol: ssh
 		"", // keep the auth key
 		"", // still no signing
 		"", // save
@@ -117,7 +120,7 @@ func TestEditWizard(t *testing.T) {
 func TestWizardCancel(t *testing.T) {
 	s := newSandbox(t)
 	s.tty = true
-	s.stdin = script("work", "Jane Doe", "jane@acme.com", "", "", "", "", "", "0", "n")
+	s.stdin = script("work", "Jane Doe", "jane@acme.com", "", "", "", "", "", "", "0", "n")
 	if stderr := s.mustFail(1, "add"); !strings.Contains(stderr, "cancelled") {
 		t.Errorf("stderr: %s", stderr)
 	}
@@ -363,5 +366,27 @@ func TestInitialImportHelper(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Errorf("len(list) = %d, want 2", len(list))
+	}
+}
+
+func TestAddWizardHTTPS(t *testing.T) {
+	s := newSandbox(t)
+	s.tty = true
+	s.stdin = script(
+		"corp", "Jane Corp", "jane@corp.dev", // identity
+		"gitlab.corp.dev", // hosts: gitlab (not github, so github-user skipped)
+		"~/projects/corp", // folders
+		"2",               // protocol: 2 = HTTPS
+		"jane-corp",       // HTTPS username
+		"",                // signing: generate a separate key (the default for new https)
+		"0",               // sign commits and tags
+		"",                // save
+	)
+	s.mustRun("add")
+
+	acc := loadAccount(t, s, "corp")
+	if acc.Name != "Jane Corp" || acc.Email != "jane@corp.dev" || acc.Protocol != accounts.ProtocolHTTPS ||
+		acc.HTTPSUser != "jane-corp" || acc.AuthKey != "" || acc.SigningKey != "~/.ssh/id_ed25519_corp_signing.pub" {
+		t.Errorf("account = %+v", acc)
 	}
 }
