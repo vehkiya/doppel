@@ -254,3 +254,33 @@ func TestDoctorIDESettings(t *testing.T) {
 		t.Errorf("doctor missing VS Code warning:\n%s", out)
 	}
 }
+
+func TestDoctorRunFromRepoWithIDE(t *testing.T) {
+	s := doctorSandbox(t)
+	repo := s.GitInit("projects/work/api")
+	s.Write("projects/work/api/.vscode/settings.json", `{
+  "git.useBuiltinCredentialProvider": false
+}`)
+	s.Write("projects/work/api/.idea/vcs.xml", `<project>
+  <component name="Git.Settings">
+    <option name="SSH_EXECUTABLE" value="IDEA_SSH" />
+  </component>
+</project>`)
+
+	s.stdout.Reset()
+	s.stderr.Reset()
+	code := s.runIn(repo, "doctor")
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	out := s.stdout.String()
+	if !strings.Contains(out, "IDE settings") {
+		t.Errorf("doctor in repo missing IDE settings heading:\n%s", out)
+	}
+	if !strings.Contains(out, "Current repo: .idea uses the built-in SSH executable") {
+		t.Errorf("doctor in repo missing .idea warning:\n%s", out)
+	}
+	if !strings.Contains(out, "Current repo: .vscode: built-in credential provider is disabled") {
+		t.Errorf("doctor in repo missing .vscode finding:\n%s", out)
+	}
+}

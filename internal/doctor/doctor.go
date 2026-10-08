@@ -60,6 +60,8 @@ type Options struct {
 	// checked, through store.Save like any other write. The caller holds
 	// the write lock from before it loaded the accounts.
 	Fix bool
+	// Cwd is the current working directory where doctor was run.
+	Cwd string
 }
 
 // checker collects findings, each in the area being checked.
