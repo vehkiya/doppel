@@ -289,6 +289,20 @@ An account's GitHub username applies to all its GitHub hosts. Separate identitie
 
 ---
 
+## 💻 IDE & Editor Integration
+
+Because doppel writes native Git configuration (`includeIf "gitdir:..."`), **VS Code and JetBrains IDEs (IntelliJ IDEA, WebStorm, PyCharm, GoLand, Rider) automatically evaluate your accounts** when executing Git commands in your repositories.
+
+To prevent common graphical IDE friction points (such as IntelliJ's built-in SSH client ignoring `core.sshCommand`, or VS Code's single-account credential provider overriding account HTTPS usernames), see the dedicated **[IDE Integration Guide](IDE.md)**.
+
+You can verify your IDE configuration at any time by running:
+
+```bash
+doppel doctor
+```
+
+---
+
 ## 🛡️ Safety
 
 * **What changes:** doppel only changes two files of yours, and only with one block each: the include line in your global Git config and its block in `allowed_signers`. Everything else lives in `~/.config/doppel`.

@@ -229,3 +229,28 @@ func TestEditDoesNotStaleIndex(t *testing.T) {
 		t.Errorf("whoami warned about stale index after edit:\n%s", s.stderr.String())
 	}
 }
+
+func TestDoctorIDESettings(t *testing.T) {
+	s := doctorSandbox(t)
+	s.Write(".config/JetBrains/IntelliJIdea2024.1/options/git.xml", `<application>
+  <component name="Git.Application.Settings">
+    <option name="SSH_EXECUTABLE" value="IDEA_SSH" />
+  </component>
+</application>`)
+
+	s.Write(".config/Code/User/settings.json", `{
+  "git.useBuiltinCredentialProvider": true
+}`)
+
+	s.mustFail(1, "doctor")
+	out := s.stdout.String()
+	if !strings.Contains(out, "IDE settings") {
+		t.Errorf("doctor missing IDE settings heading:\n%s", out)
+	}
+	if !strings.Contains(out, "IntelliJ IDEA") || !strings.Contains(out, "built-in SSH executable") {
+		t.Errorf("doctor missing IntelliJ warning:\n%s", out)
+	}
+	if !strings.Contains(out, "VS Code") || !strings.Contains(out, "git.useBuiltinCredentialProvider") {
+		t.Errorf("doctor missing VS Code warning:\n%s", out)
+	}
+}
