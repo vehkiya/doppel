@@ -227,4 +227,35 @@ func TestCheckIDESettings(t *testing.T) {
 			t.Errorf("expected OK finding, got: %+v", f)
 		}
 	}
+
+	// 4. Test repo-level IDE configs in Cwd.
+	repoDir := s.GitInit("projects/my-repo")
+	s.Write("projects/my-repo/.vscode/settings.json", `{
+  "git.useBuiltinCredentialProvider": false
+}`)
+	s.Write("projects/my-repo/.idea/vcs.xml", `<project>
+  <component name="Git.Settings">
+    <option name="SSH_EXECUTABLE" value="IDEA_SSH" />
+  </component>
+</project>`)
+
+	findings = doctor.Check(doctor.Options{Env: env, Accounts: list, GitHub: &hosts.GitHub{}, Cwd: repoDir})
+	hasRepoProblem := false
+	hasRepoOK := false
+	for _, f := range findings {
+		if f.Area == "IDE settings" {
+			if strings.Contains(f.Message, "Current repo: .idea uses the built-in SSH executable") && f.Severity == doctor.Problem {
+				hasRepoProblem = true
+			}
+			if strings.Contains(f.Message, "Current repo: .vscode: built-in credential provider is disabled") && f.Severity == doctor.OK {
+				hasRepoOK = true
+			}
+		}
+	}
+	if !hasRepoProblem {
+		t.Errorf("expected repo .idea problem, got findings:\n%+v", findings)
+	}
+	if !hasRepoOK {
+		t.Errorf("expected repo .vscode OK, got findings:\n%+v", findings)
+	}
 }

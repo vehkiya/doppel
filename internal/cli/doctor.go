@@ -31,7 +31,7 @@ func (a *app) cmdDoctor(args []string) int {
 		return a.fail(err)
 	}
 	findings := doctor.Check(doctor.Options{
-		Env: a.env, Accounts: list, GitHub: a.github, Keychain: a.macKeychain(), Fix: fix,
+		Env: a.env, Accounts: list, GitHub: a.github, Keychain: a.macKeychain(), Fix: fix, Cwd: a.cwd,
 	})
 	a.printFindings(findings)
 	if doctor.Count(findings, doctor.Problem) > 0 {
