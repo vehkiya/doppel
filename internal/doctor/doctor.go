@@ -133,6 +133,7 @@ func Check(opts Options) []Finding {
 		c.area = "Account " + acc.ID
 		c.account(acc)
 	}
+	c.ide()
 	return c.findings
 }
 

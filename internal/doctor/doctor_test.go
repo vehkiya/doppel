@@ -1,6 +1,7 @@
 package doctor_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vehkiya/doppel/internal/accounts"
@@ -130,6 +131,100 @@ func TestCheckHTTPSAndHybridAccounts(t *testing.T) {
 		if msg == "~/hybrid-work/repo1 fetches over HTTPS, which doppel's keys don't cover" ||
 			msg == "~/hybrid-work/repo2 fetches over SSH, but hybrid-acc is configured for HTTPS only" {
 			t.Errorf("hybrid-acc should accept both remotes without warning: %s", msg)
+		}
+	}
+}
+
+func TestCheckIDESettings(t *testing.T) {
+	s := testenv.New(t)
+	env := s.Env()
+	env.GOOS = "linux"
+
+	list := []*accounts.Account{
+		{ID: "personal", Name: "Jane", Email: "jane@personal.dev", Hosts: []string{"github.com"}, Default: true, SignCommits: true, SigningKey: "~/.ssh/id_sign.pub"},
+		{ID: "work", Name: "Jane", Email: "jane@acme.com", Hosts: []string{"github.com"}, Protocol: accounts.ProtocolBoth, HTTPSUser: "jane-acme", Folders: []string{"~/work/"}},
+	}
+
+	// 1. Initially no IDEs installed: 0 IDE findings.
+	findings := doctor.Check(doctor.Options{Env: env, Accounts: list, GitHub: &hosts.GitHub{}})
+	for _, f := range findings {
+		if f.Area == "IDE settings" {
+			t.Errorf("expected 0 IDE findings initially, got: %+v", f)
+		}
+	}
+
+	// 2. JetBrains with IDEA_SSH (problem).
+	s.Write(".config/JetBrains/IntelliJIdea2024.1/options/git.xml", `<application>
+  <component name="Git.Application.Settings">
+    <option name="SSH_EXECUTABLE" value="IDEA_SSH" />
+  </component>
+</application>`)
+
+	// VS Code with conflicting credentials and disabled signing (warnings).
+	s.Write(".config/Code/User/settings.json", `// VS Code config
+{
+  /* Comments test */
+  "git.useBuiltinCredentialProvider": true,
+  "git.enableCommitSigning": false,
+}`)
+
+	findings = doctor.Check(doctor.Options{Env: env, Accounts: list, GitHub: &hosts.GitHub{}})
+
+	var ideFindings []doctor.Finding
+	for _, f := range findings {
+		if f.Area == "IDE settings" {
+			ideFindings = append(ideFindings, f)
+		}
+	}
+
+	if len(ideFindings) != 3 {
+		t.Fatalf("expected 3 IDE findings, got %d: %+v", len(ideFindings), ideFindings)
+	}
+
+	// Finding 1: IntelliJ IDEA problem
+	fJB := ideFindings[0]
+	if fJB.Severity != doctor.Problem || !strings.Contains(fJB.Message, "built-in SSH executable") || !strings.Contains(fJB.Fix, "Native") {
+		t.Errorf("unexpected JetBrains finding: %+v", fJB)
+	}
+
+	// Finding 2: VS Code credential provider warning
+	fVSCred := ideFindings[1]
+	if fVSCred.Severity != doctor.Warning || !strings.Contains(fVSCred.Message, "git.useBuiltinCredentialProvider") {
+		t.Errorf("unexpected VS Code cred finding: %+v", fVSCred)
+	}
+
+	// Finding 3: VS Code signing warning
+	fVSSign := ideFindings[2]
+	if fVSSign.Severity != doctor.Warning || !strings.Contains(fVSSign.Message, "git.enableCommitSigning") {
+		t.Errorf("unexpected VS Code signing finding: %+v", fVSSign)
+	}
+
+	// 3. Fix settings and verify OK findings.
+	s.Write(".config/JetBrains/IntelliJIdea2024.1/options/git.xml", `<application>
+  <component name="Git.Application.Settings">
+    <option name="SSH_EXECUTABLE" value="NATIVE_SSH" />
+  </component>
+</application>`)
+
+	s.Write(".config/Code/User/settings.json", `{
+  "git.useBuiltinCredentialProvider": false,
+  "git.enableCommitSigning": true
+}`)
+
+	findings = doctor.Check(doctor.Options{Env: env, Accounts: list, GitHub: &hosts.GitHub{}})
+	ideFindings = nil
+	for _, f := range findings {
+		if f.Area == "IDE settings" {
+			ideFindings = append(ideFindings, f)
+		}
+	}
+
+	if len(ideFindings) != 3 {
+		t.Fatalf("expected 3 OK IDE findings, got %d: %+v", len(ideFindings), ideFindings)
+	}
+	for _, f := range ideFindings {
+		if f.Severity != doctor.OK {
+			t.Errorf("expected OK finding, got: %+v", f)
 		}
 	}
 }

@@ -226,6 +226,10 @@ Checks everything that could make Git use the wrong account, and prints a one-li
   - The converted SSH URL is `git@<host>:<path>`, and converted HTTPS URL is `https://<host>/<path>`. A user name or token in an HTTPS URL is dropped when converting to SSH, so it's never printed.
   - To stay quick on big trees, doppel looks three levels deep and skips hidden, `node_modules` and `vendor` folders.
 
+**IDE settings**
+- **IntelliJ IDEA / JetBrains IDEs:** verifies that `SSH_EXECUTABLE` in `options/git.xml` or `.idea/vcs.xml` is not set to `IDEA_SSH` (built-in SSH client), which ignores `core.sshCommand`. *(problem)*
+- **Visual Studio Code & derivatives:** verifies that `git.useBuiltinCredentialProvider` does not override account credentials when multiple accounts or HTTPS accounts exist, and verifies that `git.enableCommitSigning` is not disabled while commit signing is active. *(warning)*
+
 ### R8. Safety
 
 - **R8.1 Changes to files doppel doesn't own:**
